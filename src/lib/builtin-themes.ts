@@ -1,4 +1,24 @@
 import type { BroadcastTheme } from "@/types/broadcast"
+import { SOP_LOGO_DATA_URL } from "./sop-logo"
+
+// Fallback for themes persisted/exported/imported before logoOverlay existed.
+export const DEFAULT_LOGO_OVERLAY: BroadcastTheme["logoOverlay"] = {
+  enabled: false,
+  anchor: "bottom-right",
+  offsetX: -40,
+  offsetY: -40,
+  gap: 16,
+  image: null,
+  text: {
+    content: "",
+    fontFamily: "Geist Variable",
+    fontSize: 28,
+    fontWeight: 500,
+    color: "#ffffff",
+    letterSpacing: 0.5,
+    textTransform: "none",
+  },
+}
 
 const baseTheme: Omit<BroadcastTheme, "id" | "name" | "background" | "verseText" | "reference" | "layout" | "transition" | "textBox"> = {
   builtin: true,
@@ -12,6 +32,7 @@ const baseTheme: Omit<BroadcastTheme, "id" | "name" | "background" | "verseText"
     color: "#ffffff",
     superscript: true,
   },
+  logoOverlay: DEFAULT_LOGO_OVERLAY,
 }
 
 const CLASSIC_DARK: BroadcastTheme = {
@@ -231,8 +252,101 @@ const BROADCAST_OVERLAY: BroadcastTheme = {
   },
 }
 
+const SOP: BroadcastTheme = {
+  ...baseTheme,
+  id: "builtin-sop",
+  name: "SOP",
+  background: {
+    type: "gradient",
+    color: "#1a1a3e",
+    gradient: {
+      type: "radial",
+      angle: 0,
+      stops: [
+        { color: "#1a1a3e", position: 0 },
+        { color: "#0a0a1a", position: 100 },
+      ],
+    },
+    image: null,
+  },
+  textBox: {
+    enabled: false,
+    color: "#000000",
+    opacity: 0,
+    borderRadius: 0,
+    padding: 0,
+  },
+  verseText: {
+    fontFamily: "Source Serif 4 Variable",
+    fontSize: 72,
+    fontWeight: 400,
+    color: "#ffffff",
+    horizontalAlign: "center",
+    verticalAlign: "top",
+    textTransform: "none",
+    textDecoration: "none",
+    lineHeight: 1.5,
+    letterSpacing: 0,
+    shadow: null,
+    outline: null,
+  },
+  reference: {
+    fontFamily: "Geist Variable",
+    fontSize: 48,
+    fontWeight: 500,
+    color: "#d4a574",
+    horizontalAlign: "center",
+    verticalAlign: "top",
+    textTransform: "none",
+    textDecoration: "none",
+    uppercase: true,
+    letterSpacing: 2,
+    position: "above",
+  },
+  layout: {
+    anchor: "center",
+    offsetX: 0,
+    offsetY: 0,
+    padding: { top: 60, right: 80, bottom: 60, left: 80 },
+    textAlign: "center",
+    backgroundWidth: 100,
+    backgroundHeight: 100,
+    textAreaWidth: 80,
+    textAreaHeight: 80,
+    referenceGap: 32,
+  },
+  transition: {
+    type: "fade",
+    duration: 500,
+    easing: "ease-in-out",
+    direction: "up",
+  },
+  logoOverlay: {
+    enabled: true,
+    anchor: "bottom-right",
+    offsetX: -40,
+    offsetY: -40,
+    gap: 16,
+    image: {
+      url: SOP_LOGO_DATA_URL,
+      width: 90,
+      height: 90,
+    },
+    text: {
+      content: "Streams Of Praise",
+      fontFamily: "Geist Variable",
+      fontSize: 28,
+      fontWeight: 500,
+      color: "#ffffff",
+      letterSpacing: 0.5,
+      textTransform: "none",
+    },
+  },
+}
+
 export const BUILTIN_THEMES: BroadcastTheme[] = [
   CLASSIC_DARK,
   MODERN_LIGHT,
   BROADCAST_OVERLAY,
+  SOP,
 ]

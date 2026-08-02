@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react"
+import { toast } from "sonner"
 import { invoke } from "@tauri-apps/api/core"
 import { emitTo, listen } from "@tauri-apps/api/event"
 import { availableMonitors, getAllWindows, type Monitor } from '@tauri-apps/api/window'
@@ -206,11 +207,30 @@ export function BroadcastSettings({
     useBroadcastStore.getState().setActiveTheme(id)
   }
 
+  const closeMainDisplay = async () => {
+    try {
+      await invoke("close_broadcast_window", { outputId: "main" })
+      setIsPreviewOpen(await reconcilePreviewState("main"))
+    } catch {
+      // Command may not exist yet
+    }
+  }
+
   const handleTogglePreview = async () => {
     try {
       if (isPreviewOpen) {
-        await invoke("close_broadcast_window", { outputId: "main" })
-        setIsPreviewOpen(await reconcilePreviewState("main"))
+        if (useBroadcastStore.getState().isLive) {
+          toast.warning("This is your live broadcast display", {
+            description:
+              "Closing it will stop what the congregation sees right now.",
+            action: {
+              label: "Close anyway",
+              onClick: () => void closeMainDisplay(),
+            },
+          })
+          return
+        }
+        await closeMainDisplay()
       } else {
         await invoke("open_broadcast_window", {
           outputId: "main",
@@ -296,11 +316,30 @@ export function BroadcastSettings({
     useBroadcastStore.getState().setAltActiveTheme(id)
   }
 
+  const closeAltDisplay = async () => {
+    try {
+      await invoke("close_broadcast_window", { outputId: "alt" })
+      setAltIsPreviewOpen(await reconcilePreviewState("alt"))
+    } catch (error) {
+      console.warn("Failed to close alt display window", error)
+    }
+  }
+
   const handleAltTogglePreview = async () => {
     try {
       if (altIsPreviewOpen) {
-        await invoke("close_broadcast_window", { outputId: "alt" })
-        setAltIsPreviewOpen(await reconcilePreviewState("alt"))
+        if (useBroadcastStore.getState().isLive) {
+          toast.warning("This is your live broadcast display", {
+            description:
+              "Closing it will stop what the congregation sees right now.",
+            action: {
+              label: "Close anyway",
+              onClick: () => void closeAltDisplay(),
+            },
+          })
+          return
+        }
+        await closeAltDisplay()
       } else {
         await invoke("open_broadcast_window", {
           outputId: "alt",
@@ -523,12 +562,12 @@ export function BroadcastSettings({
                   {isPreviewOpen ? (
                     <>
                       <EyeOffIcon className="size-3.5" />
-                      Close Preview
+                      Close Display
                     </>
                   ) : (
                     <>
                       <EyeIcon className="size-3.5" />
-                      Open Preview
+                      Open Display
                     </>
                   )}
                 </Button>
@@ -709,7 +748,7 @@ export function BroadcastSettings({
                   </Select>
                 </div>
                 <Button variant="outline" size="sm" className="w-full gap-1.5" disabled={monitors.length === 0} onClick={handleAltTogglePreview}>
-                  {altIsPreviewOpen ? (<><EyeOffIcon className="size-3.5" />Close Preview</>) : (<><EyeIcon className="size-3.5" />Open Preview</>)}
+                  {altIsPreviewOpen ? (<><EyeOffIcon className="size-3.5" />Close Display</>) : (<><EyeIcon className="size-3.5" />Open Display</>)}
                 </Button>
               </div>
             ) : (

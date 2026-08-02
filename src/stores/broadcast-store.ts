@@ -2,7 +2,8 @@ import { create } from "zustand"
 import { emitTo } from "@tauri-apps/api/event"
 import { load, type Store } from "@tauri-apps/plugin-store"
 import type { BroadcastTheme, VerseRenderData } from "@/types"
-import { BUILTIN_THEMES } from "@/lib/builtin-themes"
+import { BUILTIN_THEMES, DEFAULT_LOGO_OVERLAY } from "@/lib/builtin-themes"
+import { useSettingsStore } from "./settings-store"
 
 type SelectedElement = "verse" | "reference" | null
 
@@ -80,16 +81,19 @@ function setNestedValue(obj: Record<string, unknown>, path: string, value: unkno
 function emitDraftToBroadcast(state: BroadcastState): void {
   if (!state.draftTheme) return
   const id = state.editingThemeId
+  const idleFadeMs = useSettingsStore.getState().idleFadeMs
   if (id === state.activeThemeId) {
     void emitTo("broadcast", "broadcast:verse-update", {
       theme: state.draftTheme,
       verse: state.liveVerse,
+      idleFadeMs,
     }).catch(() => {})
   }
   if (id === state.altActiveThemeId) {
     void emitTo("broadcast-alt", "broadcast:verse-update", {
       theme: state.draftTheme,
       verse: state.liveVerse,
+      idleFadeMs,
     }).catch(() => {})
   }
 }
@@ -176,6 +180,7 @@ export const useBroadcastStore = create<BroadcastState>((set, get) => ({
     void emitTo(label, "broadcast:verse-update", {
       theme,
       verse: s.liveVerse,
+      idleFadeMs: useSettingsStore.getState().idleFadeMs,
     }).catch(() => {})
   },
   syncBroadcastOutput: () => {
@@ -290,7 +295,12 @@ export function hydrateBroadcastThemes(): Promise<void> {
 
       const patch: Partial<BroadcastState> = {}
       if (customThemes && Array.isArray(customThemes) && customThemes.length > 0) {
-        patch.themes = [...BUILTIN_THEMES, ...customThemes]
+        // Back-fill for custom themes persisted before logoOverlay existed.
+        const normalized = customThemes.map((t) => ({
+          ...t,
+          logoOverlay: t.logoOverlay ?? DEFAULT_LOGO_OVERLAY,
+        }))
+        patch.themes = [...BUILTIN_THEMES, ...normalized]
       }
       if (activeId) patch.activeThemeId = activeId
       if (altActiveId) patch.altActiveThemeId = altActiveId

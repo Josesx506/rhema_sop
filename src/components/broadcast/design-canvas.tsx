@@ -354,6 +354,18 @@ async function syncThemeToCanvas(
     }
   }
 
+  if (theme.logoOverlay.enabled && theme.logoOverlay.image?.url) {
+    const logoImg = imageCache.get(theme.logoOverlay.image.url)
+    if (!logoImg) {
+      ensureImage(
+        theme.logoOverlay.image.url,
+        imageCache,
+        imageRequests,
+        onImageReady
+      )
+    }
+  }
+
   const { bitmap, metrics } = renderThemeBitmap(theme, imageCache)
   ws.set({
     fill: new fabric.Pattern({

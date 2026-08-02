@@ -357,6 +357,79 @@ function drawBackground(
   }
 }
 
+function drawLogoOverlay(
+  ctx: CanvasRenderingContext2D,
+  theme: BroadcastTheme,
+  imageCache?: Map<string, HTMLImageElement>
+): void {
+  const overlay = theme.logoOverlay
+  if (!overlay?.enabled || !overlay.image) return
+
+  const img = imageCache?.get(overlay.image.url)
+  if (!img) return // not loaded yet; skip silently rather than drawing a placeholder block
+
+  const { width: canvasW, height: canvasH } = theme.resolution
+  const imgW = overlay.image.width
+  const imgH = overlay.image.height
+  const gap = overlay.gap
+  const text = overlay.text
+  const hasText = text.content.trim().length > 0
+  const transformedText = applyTextTransform(
+    text.content,
+    resolveTextTransform(text.textTransform)
+  )
+
+  ctx.save()
+  ctx.font = `${text.fontWeight} ${text.fontSize}px "${text.fontFamily}", sans-serif`
+  if (text.letterSpacing > 0) {
+    try {
+      ctx.letterSpacing = `${text.letterSpacing}px`
+    } catch {
+      /* unsupported in some WebViews */
+    }
+  }
+  const textWidth = hasText ? ctx.measureText(transformedText).width : 0
+  ctx.restore()
+
+  const groupWidth = imgW + (hasText ? gap + textWidth : 0)
+  const groupHeight = Math.max(imgH, hasText ? text.fontSize : 0)
+  const pos = anchorPosition(
+    overlay.anchor,
+    groupWidth,
+    groupHeight,
+    canvasW,
+    canvasH,
+    overlay.offsetX,
+    overlay.offsetY
+  )
+
+  // Text reads before hitting the logo when anchored to the right side
+  // (e.g. "Streams Of Praise [LOGO]" in the bottom-right corner); otherwise
+  // the logo leads.
+  const imageOnRight = overlay.anchor.includes("right") || overlay.anchor === "center"
+  const imgX = imageOnRight ? pos.x + groupWidth - imgW : pos.x
+  const imgY = pos.y + (groupHeight - imgH) / 2
+  ctx.drawImage(img, imgX, imgY, imgW, imgH)
+
+  if (hasText) {
+    const textX = imageOnRight ? pos.x : pos.x + imgW + gap
+    ctx.save()
+    ctx.font = `${text.fontWeight} ${text.fontSize}px "${text.fontFamily}", sans-serif`
+    ctx.fillStyle = text.color
+    ctx.textBaseline = "middle"
+    ctx.textAlign = "left"
+    if (text.letterSpacing > 0) {
+      try {
+        ctx.letterSpacing = `${text.letterSpacing}px`
+      } catch {
+        /* unsupported in some WebViews */
+      }
+    }
+    ctx.fillText(transformedText, textX, pos.y + groupHeight / 2)
+    ctx.restore()
+  }
+}
+
 function drawReference(
   ctx: CanvasRenderingContext2D,
   theme: BroadcastTheme,
@@ -606,6 +679,24 @@ function buildScaledTheme(
       ...theme.textBox,
       borderRadius: theme.textBox.borderRadius * scale,
       padding: theme.textBox.padding * scale,
+    },
+    logoOverlay: {
+      ...theme.logoOverlay,
+      offsetX: theme.logoOverlay.offsetX * scale,
+      offsetY: theme.logoOverlay.offsetY * scale,
+      gap: theme.logoOverlay.gap * scale,
+      image: theme.logoOverlay.image
+        ? {
+            ...theme.logoOverlay.image,
+            width: theme.logoOverlay.image.width * scale,
+            height: theme.logoOverlay.image.height * scale,
+          }
+        : null,
+      text: {
+        ...theme.logoOverlay.text,
+        fontSize: theme.logoOverlay.text.fontSize * scale,
+        letterSpacing: theme.logoOverlay.text.letterSpacing * scale,
+      },
     },
   }
 }
@@ -980,6 +1071,10 @@ function renderVerseImpl(
 
   // Draw background
   drawBackground(ctx, scaledTheme, options?.imageCache)
+
+  // Draw the logo/watermark overlay — persistent regardless of live-verse
+  // state, drawn under the text box/verse text so live text stays legible.
+  drawLogoOverlay(ctx, scaledTheme, options?.imageCache)
 
   // Draw text box if enabled
   if (scaledTheme.textBox.enabled) {

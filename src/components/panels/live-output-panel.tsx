@@ -1,15 +1,23 @@
-import { useEffect } from "react"
+import { useEffect, useRef, useState } from "react"
+import { toast } from "sonner"
+import { getAllWindows } from "@tauri-apps/api/window"
 import { PanelHeader } from "@/components/ui/panel-header"
 import { CanvasVerse } from "@/components/ui/canvas-verse"
 import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
-import { useBroadcastStore, useBibleStore } from "@/stores"
+import { useBroadcastStore, useBibleStore, useSettingsStore } from "@/stores"
 import { deriveLiveVerse } from "@/hooks/use-broadcast"
+
+async function hasOpenBroadcastWindow(): Promise<boolean> {
+  const windows = await getAllWindows()
+  return windows.some((w) => w.label === "broadcast" || w.label === "broadcast-alt")
+}
 
 export function LiveOutputPanel() {
   const isLive = useBroadcastStore((s) => s.isLive)
   const themes = useBroadcastStore((s) => s.themes)
   const activeThemeId = useBroadcastStore((s) => s.activeThemeId)
+  const idleFadeMs = useSettingsStore((s) => s.idleFadeMs)
 
   // Read the same data source as the preview panel
   const selectedVerse = useBibleStore((s) => s.selectedVerse)
@@ -26,9 +34,27 @@ export function LiveOutputPanel() {
     translation,
   })
 
+  const [faded, setFaded] = useState(false)
+  const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   useEffect(() => {
     useBroadcastStore.getState().setLiveVerse(verseData)
-  }, [verseData])
+
+    if (idleTimerRef.current) {
+      clearTimeout(idleTimerRef.current)
+      idleTimerRef.current = null
+    }
+    if (verseData) {
+      setFaded(false)
+      idleTimerRef.current = setTimeout(() => setFaded(true), idleFadeMs)
+    } else {
+      setFaded(false)
+    }
+
+    return () => {
+      if (idleTimerRef.current) clearTimeout(idleTimerRef.current)
+    }
+  }, [verseData, idleFadeMs])
 
   return (
     <div
@@ -50,9 +76,19 @@ export function LiveOutputPanel() {
           </span>
           <Switch
             checked={isLive}
-            onCheckedChange={(checked) =>
+            onCheckedChange={(checked) => {
               useBroadcastStore.getState().setLive(checked)
-            }
+              if (checked) {
+                void hasOpenBroadcastWindow().then((open) => {
+                  if (!open) {
+                    toast.warning("No broadcast window open", {
+                      description:
+                        "Go live won't be visible to the congregation until you open a broadcast window in Broadcast Settings.",
+                    })
+                  }
+                })
+              }
+            }}
             className="data-[state=checked]:bg-emerald-500"
           />
         </label>
@@ -60,8 +96,9 @@ export function LiveOutputPanel() {
 
       <div
         className={cn(
-          "flex min-h-0 flex-1 items-center justify-center p-3 transition-opacity",
-          !isLive && "opacity-40"
+          "flex min-h-0 flex-1 items-center justify-center p-3 transition-opacity duration-700",
+          !isLive && "opacity-40",
+          faded && "opacity-0"
         )}
       >
         <CanvasVerse theme={activeTheme} verse={verseData} />

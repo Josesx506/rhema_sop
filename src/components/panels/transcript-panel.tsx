@@ -78,9 +78,12 @@ export function TranscriptPanel() {
   useTauriEvent<DetectionResult[]>("verse_detections", (detections) => {
     useDetectionStore.getState().addDetections(detections)
 
-    // Auto-navigate book search + select verse for preview/live
+    // Auto-navigate book search + select verse for preview/live.
+    // Gated on auto_queued (backend-computed cooldown + confidence check) so a
+    // burst of speech right after a verse is read doesn't immediately hijack
+    // the live display with a new, possibly spurious, direct match.
     const directHit = detections.find(
-      (d) => d.source === "direct" && !d.is_chapter_only
+      (d) => d.source === "direct" && !d.is_chapter_only && d.auto_queued
     )
     if (directHit && directHit.book_number > 0) {
       // Select verse immediately so preview/live panels update

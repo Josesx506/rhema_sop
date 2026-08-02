@@ -21,6 +21,7 @@ import { existsSync } from "node:fs"
 import {
   ensurePythonEnv,
   getVenvBin,
+  installPipDeps,
   PROJECT_ROOT,
 } from "./lib/python-env"
 
@@ -92,6 +93,12 @@ async function main() {
     "torch",
     "meaningless",
   ])
+
+  // optimum-onnx pins optimum~=2.1.0, but that version fails to export
+  // SentenceTransformer models to ONNX (AttributeError: property 'config'
+  // of 'SentenceTransformer' object has no setter). Upgrade it separately
+  // so pip's resolver doesn't block on optimum-onnx's declared constraint.
+  await installPipDeps(["--upgrade", "optimum>=2.2.0"])
 
   // ── Phase 2: Bible source data (pre-built zip + cross-refs) ────
   console.log("\n━━━ Phase 2/7: Download Bible source data ━━━")

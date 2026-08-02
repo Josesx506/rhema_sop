@@ -20,6 +20,14 @@ export type TextHorizontalAlign = "left" | "center" | "right" | "justify"
 export type TextVerticalAlign = "top" | "middle" | "bottom"
 export type TextTransform = "none" | "uppercase" | "lowercase" | "capitalize"
 export type TextDecoration = "none" | "underline" | "line-through"
+export type AnchorPosition =
+  | "center"
+  | "top-left"
+  | "top-center"
+  | "top-right"
+  | "bottom-left"
+  | "bottom-center"
+  | "bottom-right"
 
 export interface BroadcastTheme {
   id: string
@@ -86,14 +94,7 @@ export interface BroadcastTheme {
     position: "above" | "below" | "inline"
   }
   layout: {
-    anchor:
-      | "center"
-      | "top-left"
-      | "top-center"
-      | "top-right"
-      | "bottom-left"
-      | "bottom-center"
-      | "bottom-right"
+    anchor: AnchorPosition
     offsetX: number
     offsetY: number
     padding: { top: number; right: number; bottom: number; left: number }
@@ -109,5 +110,29 @@ export interface BroadcastTheme {
     duration: number
     easing: "linear" | "ease-in" | "ease-out" | "ease-in-out"
     direction: "up" | "down" | "left" | "right"
+  }
+  /** Persistent image + adjacent text watermark (e.g. a ministry logo),
+   * independent of the live verse — shown whether or not a verse is live. */
+  logoOverlay: {
+    enabled: boolean
+    anchor: AnchorPosition
+    offsetX: number
+    offsetY: number
+    /** Gap in px between the image and the text. */
+    gap: number
+    image: {
+      url: string
+      width: number
+      height: number
+    } | null
+    text: {
+      content: string
+      fontFamily: string
+      fontSize: number
+      fontWeight: number
+      color: string
+      letterSpacing: number
+      textTransform?: TextTransform
+    }
   }
 }

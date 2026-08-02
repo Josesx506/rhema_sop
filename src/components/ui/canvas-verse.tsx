@@ -56,26 +56,32 @@ export const CanvasVerse = memo(function CanvasVerse({
     })
   }, [theme, verse, containerWidth])
 
-  // Preload background image so the renderer can find it in the cache.
+  // Preload background + logo overlay images so the renderer can find them in the cache.
   useEffect(() => {
-    const bg = theme.background
-    if (bg.type !== "image" || !bg.image?.url) return
-    const url = bg.image.url
     const cache = imageCacheRef.current
-    if (cache.has(url)) return
+    const urls: string[] = []
+    if (theme.background.type === "image" && theme.background.image?.url) {
+      urls.push(theme.background.image.url)
+    }
+    if (theme.logoOverlay.enabled && theme.logoOverlay.image?.url) {
+      urls.push(theme.logoOverlay.image.url)
+    }
 
-    const img = new Image()
-    img.onload = () => {
-      cache.set(url, img)
-      draw()
+    for (const url of urls) {
+      if (cache.has(url)) continue
+      const img = new Image()
+      img.onload = () => {
+        cache.set(url, img)
+        draw()
+      }
+      img.onerror = () => {
+        console.warn("[canvas-verse] failed to load image", {
+          url: url.slice(0, 100),
+        })
+      }
+      img.src = url
     }
-    img.onerror = () => {
-      console.warn("[canvas-verse] failed to load background image", {
-        url: url.slice(0, 100),
-      })
-    }
-    img.src = url
-  }, [theme.background, draw])
+  }, [theme.background, theme.logoOverlay, draw])
 
   // Redraw whenever theme, verse, or container size changes.
   useEffect(() => {

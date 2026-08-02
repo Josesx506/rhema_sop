@@ -75,6 +75,8 @@ The local Whisper STT build compiles `whisper.cpp` from source, which requires C
 
 ```bash
 brew install cmake
+brew install rust
+curl -fsSL https://bun.com/install | bash
 ```
 
 **Linux (Debian/Ubuntu)**

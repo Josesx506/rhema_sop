@@ -310,9 +310,12 @@ function DisplayModeSection() {
     setAutoMode,
     confidenceThreshold,
     setConfidenceThreshold,
+    idleFadeMs,
+    setIdleFadeMs,
   } = useSettingsStore()
 
   const thresholdPercent = Math.round(confidenceThreshold * 100)
+  const idleFadeSeconds = Math.round(idleFadeMs / 1000)
 
   return (
     <div className="flex flex-col gap-6">
@@ -387,6 +390,29 @@ function DisplayModeSection() {
           </p>
         </div>
       )}
+
+      {/* Idle fade timeout */}
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center justify-between">
+          <label className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            Idle Fade Timeout
+          </label>
+          <span className="text-xs tabular-nums text-muted-foreground">
+            {idleFadeSeconds}s
+          </span>
+        </div>
+        <Slider
+          min={10}
+          max={120}
+          step={5}
+          value={[idleFadeSeconds]}
+          onValueChange={([v]) => setIdleFadeMs(v * 1000)}
+        />
+        <p className="text-[0.625rem] text-muted-foreground">
+          If no new verse is detected or presented within this time, the
+          broadcast display fades back to black on its own.
+        </p>
+      </div>
     </div>
   )
 }
