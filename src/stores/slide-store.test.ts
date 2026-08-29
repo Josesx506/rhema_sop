@@ -243,7 +243,7 @@ describe("slide store", () => {
 
     // A media loop starting sets onAir to a video payload (never null) —
     // the slide timer must stop rather than fight the video for the output.
-    usePresentationOnAir.setState({ onAir: { kind: "video" } })
+    usePresentationOnAir.setState({ onAir: { kind: "video", src: "loop.mp4" } })
 
     expect(useSlideStore.getState().playing).toBe(false)
     expect(useSlideStore.getState().activeDeckId).toBeNull()

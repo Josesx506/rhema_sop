@@ -1,13 +1,145 @@
+import { useEffect } from "react"
 import { PanelHeader } from "@/components/ui/panel-header"
+import { Button } from "@/components/ui/button"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import { cn } from "@/lib/utils"
+import { ChevronLeftIcon, ChevronRightIcon, XIcon } from "lucide-react"
+import { useSongStore } from "@/stores/song-store"
+import type { SetlistEntry, SongBlock } from "@/types/songs"
 
-/** Placeholder — implemented by the songs module agent. */
-export function SetlistPanel() {
+function isTypingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
   return (
-    <div className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-card">
-      <PanelHeader title="Setlist" />
-      <div className="flex flex-1 items-center justify-center text-xs text-muted-foreground">
-        Songs module under construction
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    target.isContentEditable
+  )
+}
+
+function BlockRow({ block, isActive, onClick }: { block: SongBlock; isActive: boolean; onClick: () => void }) {
+  return (
+    <div
+      onClick={onClick}
+      className={cn(
+        "flex cursor-pointer flex-col gap-0.5 rounded-md px-2.5 py-1.5 transition-colors",
+        isActive ? "border border-primary/30 bg-primary/10 ring-1 ring-primary/40" : "hover:bg-muted/50"
+      )}
+    >
+      <span className="text-xs font-medium text-foreground">{block.label}</span>
+      <span className="truncate text-[0.6875rem] text-muted-foreground">
+        {block.lines[0] ?? "(no lyrics)"}
+      </span>
+    </div>
+  )
+}
+
+function SetlistEntryGroup({
+  entry,
+  activeBlockId,
+  onPresent,
+  onRemove,
+}: {
+  entry: SetlistEntry
+  activeBlockId: string | null
+  onPresent: (blockId: string) => void
+  onRemove: () => void
+}) {
+  return (
+    <div className="flex flex-col gap-0.5">
+      <div className="group flex items-center gap-1.5 px-1 pt-2 pb-1">
+        <span className="flex-1 truncate text-[0.6875rem] font-semibold tracking-wide text-muted-foreground uppercase">
+          {entry.title}
+        </span>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          className="opacity-0 transition-opacity group-hover:opacity-100"
+          onClick={onRemove}
+        >
+          <XIcon className="size-3" />
+        </Button>
       </div>
+      {entry.blocks.map((block) => (
+        <BlockRow
+          key={block.id}
+          block={block}
+          isActive={block.id === activeBlockId}
+          onClick={() => onPresent(block.id)}
+        />
+      ))}
+    </div>
+  )
+}
+
+export function SetlistPanel() {
+  const setlist = useSongStore((s) => s.setlist)
+  const activeBlockId = useSongStore((s) => s.activeBlockId)
+  const songs = useSongStore((s) => s.songs)
+
+  const activeEntry = setlist.find((e) => e.blocks.some((b) => b.id === activeBlockId))
+  const activeSong = activeEntry ? songs.find((s) => s.id === activeEntry.songId) : undefined
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (isTypingTarget(e.target)) return
+      if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+        e.preventDefault()
+        useSongStore.getState().nextBlock()
+      } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+        e.preventDefault()
+        useSongStore.getState().prevBlock()
+      }
+    }
+    document.addEventListener("keydown", handleKeyDown)
+    return () => document.removeEventListener("keydown", handleKeyDown)
+  }, [])
+
+  return (
+    <div
+      data-slot="setlist-panel"
+      className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-card"
+    >
+      <PanelHeader title="Setlist">
+        <div className="flex items-center gap-1">
+          <Button variant="ghost" size="icon-xs" title="Previous block" onClick={() => useSongStore.getState().prevBlock()}>
+            <ChevronLeftIcon className="size-3.5" />
+          </Button>
+          <Button variant="ghost" size="icon-xs" title="Next block" onClick={() => useSongStore.getState().nextBlock()}>
+            <ChevronRightIcon className="size-3.5" />
+          </Button>
+          <button
+            onClick={() => useSongStore.getState().clearSetlist()}
+            className="text-[0.625rem] text-muted-foreground transition-colors hover:text-foreground"
+          >
+            Clear
+          </button>
+        </div>
+      </PanelHeader>
+
+      {activeSong?.ccliNumber && (
+        <div className="border-b border-border px-3 py-1.5 text-[0.625rem] text-muted-foreground">
+          CCLI # {activeSong.ccliNumber}
+        </div>
+      )}
+
+      <ScrollArea className="min-h-0 flex-1">
+        <div className="flex flex-col gap-1 p-1.5">
+          {setlist.length === 0 && (
+            <p className="p-4 text-center text-xs text-muted-foreground">
+              Add songs from the catalog to build a setlist
+            </p>
+          )}
+          {setlist.map((entry) => (
+            <SetlistEntryGroup
+              key={entry.id}
+              entry={entry}
+              activeBlockId={activeBlockId}
+              onPresent={(blockId) => useSongStore.getState().presentBlock(entry.id, blockId)}
+              onRemove={() => useSongStore.getState().removeEntry(entry.id)}
+            />
+          ))}
+        </div>
+      </ScrollArea>
     </div>
   )
 }
