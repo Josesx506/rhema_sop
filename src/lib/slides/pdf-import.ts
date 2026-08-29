@@ -93,8 +93,17 @@ export async function importPdfDeck(
     pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl
 
     const doc = await withTimeout(
-      pdfjsLib.getDocument({ data: bytes, isOffscreenCanvasSupported: false })
-        .promise,
+      pdfjsLib.getDocument({
+        data: bytes,
+        // WKWebView hardening (see header comment): keep rendering on the
+        // classic main-thread canvas path, decode images with the JS
+        // fallbacks instead of the wasm decoders (observed to wedge the
+        // worker on the first image-heavy page — "page 2/4 timed out"),
+        // and fetch auxiliary data from the main thread, not the worker.
+        isOffscreenCanvasSupported: false,
+        useWasm: false,
+        useWorkerFetch: false,
+      }).promise,
       PAGE_RENDER_TIMEOUT_MS,
       "Opening the PDF"
     )
@@ -125,7 +134,9 @@ export async function importPdfDeck(
         `Rendering page ${pageNumber}/${total}`
       )
       pages.push(canvas.toDataURL("image/jpeg", 0.85))
-      page.cleanup()
+      // No per-page cleanup() here: it resets font/image state shared
+      // across pages and can wedge the worker between renders. The
+      // loadingTask.destroy() below frees everything at once.
       onProgress?.(pageNumber, total)
     }
 
