@@ -78,6 +78,12 @@ const DOC_OPTIONS = {
   isOffscreenCanvasSupported: false,
   useWasm: false,
   useWorkerFetch: false,
+  // Draw glyphs as vector paths on the canvas instead of installing fonts
+  // via the FontFace API and using fillText. WKWebView's font install can
+  // silently fail, which paints every run of text as NOTHING — images and
+  // backgrounds render, text vanishes. Path rendering bypasses browser
+  // font machinery entirely.
+  disableFontFace: true,
   // Served by vite-plugin-static-copy (see vite.config.ts). Without the
   // standard-font pack, text set in non-embedded fonts renders blank.
   standardFontDataUrl: "/pdfjs/standard_fonts/",
@@ -231,6 +237,16 @@ export async function importPdfDeck(
   }
   log(`"${name}.pdf" read: ${bytes.length} bytes`)
 
+  // pdf.js reports its internal problems (font load failures, missing
+  // glyphs, bad cmaps) via console.log, which console-to-log deliberately
+  // drops. Bridge log→warn for the duration of the import so those
+  // diagnostics land in the exported log file.
+  const originalConsoleLog = console.log.bind(console)
+  console.log = (...args: unknown[]) => {
+    originalConsoleLog(...args)
+    console.warn("[pdfjs]", ...args)
+  }
+
   try {
     const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs")
     pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl
@@ -238,7 +254,7 @@ export async function importPdfDeck(
     // session ran (session decks imported by older code look broken even
     // after an update until the app restarts and the deck is reimported).
     log(
-      `pipeline v3 (white-bg, font-pack) — pdfjs ${pdfjsLib.version ?? "?"}, worker: ${pdfWorkerUrl}`
+      `pipeline v4 (glyph paths, white-bg, font-pack) — pdfjs ${pdfjsLib.version ?? "?"}, worker: ${pdfWorkerUrl}`
     )
 
     try {
@@ -259,5 +275,7 @@ export async function importPdfDeck(
       throw new Error(`Failed to import "${name}.pdf": ${err.message}`)
     }
     throw new Error(`Failed to import "${name}.pdf": ${String(err)}`)
+  } finally {
+    console.log = originalConsoleLog
   }
 }
