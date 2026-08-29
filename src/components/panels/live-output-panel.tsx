@@ -8,6 +8,11 @@ import { cn } from "@/lib/utils"
 import { useBroadcastStore, useBibleStore, useSettingsStore } from "@/stores"
 import { presentVerse, toVerseRenderData } from "@/hooks/use-broadcast"
 import { bibleActions } from "@/hooks/use-bible"
+import { usePresentationOnAir } from "@/lib/presentation-broadcast"
+import {
+  PresentationLiveMirror,
+  presentationMirrorVisible,
+} from "@/components/ui/presentation-live-mirror"
 
 async function hasOpenBroadcastWindow(): Promise<boolean> {
   const windows = await getAllWindows()
@@ -25,6 +30,8 @@ export function LiveOutputPanel() {
   const activeTranslationId = useBibleStore((s) => s.activeTranslationId)
 
   const activeTheme = themes.find((t) => t.id === activeThemeId) ?? themes[0]
+  const presentationOnAir = usePresentationOnAir((s) => s.onAir)
+  const presentationShowing = presentationMirrorVisible(presentationOnAir, isLive)
 
   // The live output renders only what was explicitly presented — it no longer
   // follows the preview selection, so detections can't override the operator.
@@ -137,11 +144,17 @@ export function LiveOutputPanel() {
       <div
         className={cn(
           "flex min-h-0 flex-1 items-center justify-center p-3 transition-opacity duration-700",
-          !isLive && "opacity-40",
-          faded && "opacity-0"
+          !isLive && !presentationShowing && "opacity-40",
+          faded && !presentationShowing && "opacity-0"
         )}
       >
-        <CanvasVerse theme={activeTheme} verse={verseData} />
+        {/* Fork: mirror slides/videos when the presentation channel owns
+            the output — CanvasVerse only knows about the verse channel. */}
+        {presentationShowing && presentationOnAir ? (
+          <PresentationLiveMirror payload={presentationOnAir} />
+        ) : (
+          <CanvasVerse theme={activeTheme} verse={verseData} />
+        )}
       </div>
     </div>
   )

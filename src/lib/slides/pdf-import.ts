@@ -35,8 +35,11 @@ import pdfWorkerUrl from "pdfjs-dist/legacy/build/pdf.worker.min.mjs?url"
 /** Longest side of a rendered page image, in pixels. */
 const MAX_SIDE = 1920
 
-/** A step that makes no progress fails loudly instead of hanging. */
-const PAGE_RENDER_TIMEOUT_MS = 30_000
+/** Opening a document (includes worker boot + parse) gets a generous cap. */
+const DOC_OPEN_TIMEOUT_MS = 30_000
+/** Page renders normally finish well under a second; a stalled one should
+ * trip the fallback quickly rather than sit on a 30s watchdog. */
+const PAGE_RENDER_TIMEOUT_MS = 10_000
 
 export interface ImportedDeck {
   name: string
@@ -117,7 +120,7 @@ async function renderAllPagesSharedDoc(
 ): Promise<string[]> {
   const doc = await withTimeout(
     pdfjsLib.getDocument({ data: bytes.slice(), ...DOC_OPTIONS }).promise,
-    PAGE_RENDER_TIMEOUT_MS,
+    DOC_OPEN_TIMEOUT_MS,
     "Opening the PDF"
   )
   log(`document opened: ${doc.numPages} pages`)
@@ -153,7 +156,7 @@ async function renderAllPagesFreshDocPerPage(
   log("falling back to fresh-worker-per-page mode")
   const probe = await withTimeout(
     pdfjsLib.getDocument({ data: bytes.slice(), ...DOC_OPTIONS }).promise,
-    PAGE_RENDER_TIMEOUT_MS,
+    DOC_OPEN_TIMEOUT_MS,
     "Opening the PDF (fallback)"
   )
   const total = probe.numPages
@@ -163,7 +166,7 @@ async function renderAllPagesFreshDocPerPage(
   for (let pageNumber = 1; pageNumber <= total; pageNumber++) {
     const doc = await withTimeout(
       pdfjsLib.getDocument({ data: bytes.slice(), ...DOC_OPTIONS }).promise,
-      PAGE_RENDER_TIMEOUT_MS,
+      DOC_OPEN_TIMEOUT_MS,
       `Reopening the PDF for page ${pageNumber}/${total}`
     )
     try {

@@ -75,7 +75,9 @@ function DeckThumbnails({
             <img
               src={page}
               alt={`${deck.name} page ${index + 1}`}
-              className="size-full object-cover"
+              // contain, not cover: document-style pages crop to their blank
+              // white centers under cover, making thumbnails look empty.
+              className="size-full object-contain"
               draggable={false}
             />
             <span className="absolute bottom-0.5 right-1 rounded bg-black/60 px-1 text-[0.5625rem] font-medium text-white">
