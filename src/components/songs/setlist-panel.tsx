@@ -1,6 +1,7 @@
 import { useEffect } from "react"
 import { PanelHeader } from "@/components/ui/panel-header"
 import { Button } from "@/components/ui/button"
+import { Switch } from "@/components/ui/switch"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
 import { ChevronLeftIcon, ChevronRightIcon, XIcon } from "lucide-react"
@@ -20,19 +21,22 @@ function BlockRow({
   block,
   isLive,
   isPreviewed,
-  onClick,
-  onDoubleClick,
+  onPreview,
+  onPresent,
 }: {
   block: SongBlock
   isLive: boolean
   isPreviewed: boolean
-  onClick: () => void
-  onDoubleClick: () => void
+  onPreview: () => void
+  onPresent: () => void
 }) {
   return (
     <div
-      onClick={onClick}
-      onDoubleClick={onDoubleClick}
+      // Single click presents — same convention as Scripture-mode queue
+      // rows, one click per block during a song. ⌥-click previews only
+      // (arrow keys + Enter remain the keyboard preview path).
+      onClick={(e) => (e.altKey ? onPreview() : onPresent())}
+      title="Click to present · ⌥-click to preview"
       className={cn(
         "flex cursor-pointer flex-col gap-0.5 rounded-md px-2.5 py-1.5 transition-colors",
         // Live styling is dominant when a row is both previewed and live.
@@ -87,8 +91,8 @@ function SetlistEntryGroup({
           block={block}
           isLive={block.id === activeBlockId}
           isPreviewed={block.id === previewBlockId}
-          onClick={() => onPreview(block.id)}
-          onDoubleClick={() => onPresent(block.id)}
+          onPreview={() => onPreview(block.id)}
+          onPresent={() => onPresent(block.id)}
         />
       ))}
     </div>
@@ -103,6 +107,7 @@ export function SetlistPanel() {
 
   const activeEntry = setlist.find((e) => e.blocks.some((b) => b.id === activeBlockId))
   const activeSong = activeEntry ? songs.find((s) => s.id === activeEntry.songId) : undefined
+  const allowDuplicates = useSongStore((s) => s.allowSetlistDuplicates)
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -129,6 +134,18 @@ export function SetlistPanel() {
     >
       <PanelHeader title="Setlist">
         <div className="flex items-center gap-1">
+          <label
+            className="mr-1 flex items-center gap-1.5 text-[0.625rem] uppercase tracking-wider text-muted-foreground"
+            title="When off, each song can appear only once in the setlist"
+          >
+            Repeats
+            <Switch
+              checked={allowDuplicates}
+              onCheckedChange={(checked) =>
+                useSongStore.getState().setAllowSetlistDuplicates(checked)
+              }
+            />
+          </label>
           <Button variant="ghost" size="icon-xs" title="Previous block" onClick={() => useSongStore.getState().prevBlock()}>
             <ChevronLeftIcon className="size-3.5" />
           </Button>

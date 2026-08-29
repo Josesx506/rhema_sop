@@ -162,6 +162,33 @@ describe("song store setlist", () => {
     expect(useSongStore.getState().setlist).toHaveLength(0)
   })
 
+  it("deduplicates songs by default: adding the same song twice keeps one entry", async () => {
+    const { useSongStore } = await import("./song-store")
+    const song = makeSong()
+    useSongStore.setState({ songs: [song] })
+
+    useSongStore.getState().addSongToSetlist(song.id)
+    useSongStore.getState().addSongToSetlist(song.id)
+
+    expect(useSongStore.getState().setlist).toHaveLength(1)
+  })
+
+  it("allows repeated songs when allowSetlistDuplicates is on", async () => {
+    const { useSongStore } = await import("./song-store")
+    const song = makeSong()
+    useSongStore.setState({ songs: [song] })
+    useSongStore.getState().setAllowSetlistDuplicates(true)
+
+    useSongStore.getState().addSongToSetlist(song.id)
+    useSongStore.getState().addSongToSetlist(song.id)
+
+    const setlist = useSongStore.getState().setlist
+    expect(setlist).toHaveLength(2)
+    // Distinct entries (unique ids) for the same song.
+    expect(setlist[0].id).not.toBe(setlist[1].id)
+    expect(setlist[0].songId).toBe(setlist[1].songId)
+  })
+
   it("removeEntry removes the entry and clears activeBlockId only if it belonged to that entry", async () => {
     const { useSongStore } = await import("./song-store")
     const song = makeSong({ sections: [makeSection()], arrangement: [] })

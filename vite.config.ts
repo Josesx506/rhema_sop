@@ -2,10 +2,31 @@ import path from "path"
 import tailwindcss from "@tailwindcss/vite"
 import react from "@vitejs/plugin-react"
 import { defineConfig } from "vite"
+import { viteStaticCopy } from "vite-plugin-static-copy"
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [
+    react(),
+    tailwindcss(),
+    // Fork: pdf.js needs its standard-font pack and CMaps served alongside
+    // the app (PDF text using non-embedded fonts renders blank without
+    // them). See src/lib/slides/pdf-import.ts.
+    viteStaticCopy({
+      targets: [
+        {
+          src: "node_modules/pdfjs-dist/standard_fonts/*",
+          dest: "pdfjs/standard_fonts",
+          rename: { stripBase: true },
+        },
+        {
+          src: "node_modules/pdfjs-dist/cmaps/*",
+          dest: "pdfjs/cmaps",
+          rename: { stripBase: true },
+        },
+      ],
+    }),
+  ],
   server: {
     port: 3000,
     strictPort: true,

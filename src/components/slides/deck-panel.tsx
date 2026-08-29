@@ -38,13 +38,14 @@ function DeckThumbnails({
   // Single click previews (no effect on live output); double click goes
   // live immediately, preserving the previous single-click behavior
   // (re-basing the auto-advance loop when it's running).
-  const handleClick = (index: number) => {
-    useSlideStore.getState().previewPage(deck.id, index)
-  }
-
-  const handleDoubleClick = (index: number) => {
+  // Single click presents (re-basing the loop when playing) — same
+  // convention as Scripture-mode queue rows and song blocks, one click per
+  // slide. ⌥-click previews without touching the output.
+  const handleClick = (index: number, altKey: boolean) => {
     const store = useSlideStore.getState()
-    if (store.playing) {
+    if (altKey) {
+      store.previewPage(deck.id, index)
+    } else if (store.playing) {
       store.startLoop(deck.id, index)
     } else {
       store.presentPage(deck.id, index)
@@ -61,8 +62,8 @@ function DeckThumbnails({
           <button
             key={index}
             type="button"
-            onClick={() => handleClick(index)}
-            onDoubleClick={() => handleDoubleClick(index)}
+            onClick={(e) => handleClick(index, e.altKey)}
+            title="Click to present · ⌥-click to preview"
             className={cn(
               "group relative aspect-video overflow-hidden rounded-md border bg-black/40 transition-colors",
               isLive

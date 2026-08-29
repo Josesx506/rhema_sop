@@ -33,7 +33,7 @@ export function SlidePreviewPanel() {
             />
           ) : (
             <p className="p-6 text-center text-xs text-muted-foreground">
-              Click a slide to preview it
+              ⌥-click a slide to preview it
             </p>
           )}
         </div>

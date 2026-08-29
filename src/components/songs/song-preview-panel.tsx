@@ -39,7 +39,9 @@ export function SongPreviewPanel() {
             <span className="truncate text-xs text-muted-foreground">{previewBlock.label}</span>
           </>
         ) : (
-          <p className="text-center text-xs text-muted-foreground">Click a setlist block to preview it</p>
+          <p className="text-center text-xs text-muted-foreground">
+            ⌥-click a setlist block (or use arrow keys) to preview it
+          </p>
         )}
       </div>
     </div>

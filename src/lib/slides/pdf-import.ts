@@ -78,6 +78,11 @@ const DOC_OPTIONS = {
   isOffscreenCanvasSupported: false,
   useWasm: false,
   useWorkerFetch: false,
+  // Served by vite-plugin-static-copy (see vite.config.ts). Without the
+  // standard-font pack, text set in non-embedded fonts renders blank.
+  standardFontDataUrl: "/pdfjs/standard_fonts/",
+  cMapUrl: "/pdfjs/cmaps/",
+  cMapPacked: true,
 } as const
 
 // One reusable canvas: WKWebView is stingy with canvas backing memory, and
@@ -101,9 +106,21 @@ async function renderPageToDataUrl(
     throw new Error("Could not create a 2D canvas context to render the PDF")
   }
 
+  // Pre-fill white: pages without an explicit background render onto a
+  // transparent canvas, and JPEG has no alpha — transparency encodes as
+  // BLACK. The render background param covers pdf.js's own fill; this
+  // covers any region the page never touches.
+  context.fillStyle = "#FFFFFF"
+  context.fillRect(0, 0, canvas.width, canvas.height)
+
   const started = performance.now()
   await withTimeout(
-    page.render({ canvas: null, canvasContext: context, viewport }).promise,
+    page.render({
+      canvas: null,
+      canvasContext: context,
+      viewport,
+      background: "#FFFFFF",
+    }).promise,
     PAGE_RENDER_TIMEOUT_MS,
     label
   )

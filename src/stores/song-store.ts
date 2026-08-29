@@ -1,4 +1,5 @@
 import { create } from "zustand"
+import { toast } from "sonner"
 import { load, type Store } from "@tauri-apps/plugin-store"
 import type { Song, SetlistEntry, SongBlock } from "@/types/songs"
 import { expandSong } from "@/lib/songs/block-expansion"
@@ -39,6 +40,10 @@ interface SongState {
   removeEntry: (entryId: string) => void
   clearSetlist: () => void
   reorderEntries: (fromIndex: number, toIndex: number) => void
+  /** When false (default), adding a song already in the setlist is a no-op
+   * — one entry per song. Toggle on for playlists that repeat a song. */
+  allowSetlistDuplicates: boolean
+  setAllowSetlistDuplicates: (allow: boolean) => void
 
   // Presentation
   presentBlock: (entryId: string, blockId: string) => void
@@ -87,9 +92,21 @@ export const useSongStore = create<SongState>((set, get) => ({
   importSongs: (songs) => set((s) => ({ songs: [...s.songs, ...songs] })),
   setSearchQuery: (searchQuery) => set({ searchQuery }),
 
+  allowSetlistDuplicates: false,
+  setAllowSetlistDuplicates: (allowSetlistDuplicates) => set({ allowSetlistDuplicates }),
+
   addSongToSetlist: (songId) => {
     const song = get().songs.find((s) => s.id === songId)
     if (!song) return
+    if (
+      !get().allowSetlistDuplicates &&
+      get().setlist.some((e) => e.songId === songId)
+    ) {
+      toast.info(`"${song.title}" is already in the setlist`, {
+        description: "Turn on Repeats in the setlist header to add it again.",
+      })
+      return
+    }
     const entry: SetlistEntry = {
       id: crypto.randomUUID(),
       songId: song.id,
