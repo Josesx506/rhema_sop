@@ -32,6 +32,10 @@
 
 import { open } from "@tauri-apps/plugin-dialog"
 import { readFile } from "@tauri-apps/plugin-fs"
+// MUST load before pdf.js: polyfills ArrayBuffer.transfer[ToFixedLength],
+// whose absence in WKWebView (macOS 14) made pdf.js silently drop every
+// text op ("TypeError: buffer.transferToFixedLength is not a function").
+import "./arraybuffer-transfer-polyfill"
 
 /** Longest side of a rendered page image, in pixels. */
 const MAX_SIDE = 1920
@@ -262,7 +266,7 @@ export async function importPdfDeck(
     // session ran (session decks imported by older code look broken even
     // after an update until the app restarts and the deck is reimported).
     log(
-      `pipeline v5 (main-thread, glyph paths, white-bg, font-pack) — pdfjs ${pdfjsLib.version ?? "?"}, fake worker: ${Boolean((globalThis as Record<string, unknown>).pdfjsWorker)}`
+      `pipeline v6 (ArrayBuffer.transfer polyfill, main-thread, glyph paths, white-bg, font-pack) — pdfjs ${pdfjsLib.version ?? "?"}, fake worker: ${Boolean((globalThis as Record<string, unknown>).pdfjsWorker)}`
     )
 
     try {
