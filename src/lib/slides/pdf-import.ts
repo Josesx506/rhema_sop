@@ -234,7 +234,12 @@ export async function importPdfDeck(
   try {
     const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs")
     pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl
-    log(`pdfjs ${pdfjsLib.version ?? "?"} loaded, worker: ${pdfWorkerUrl}`)
+    // Pipeline version marker: proves in exported logs WHICH import code a
+    // session ran (session decks imported by older code look broken even
+    // after an update until the app restarts and the deck is reimported).
+    log(
+      `pipeline v3 (white-bg, font-pack) — pdfjs ${pdfjsLib.version ?? "?"}, worker: ${pdfWorkerUrl}`
+    )
 
     try {
       return { name, pages: await renderAllPagesSharedDoc(pdfjsLib, bytes, onProgress) }

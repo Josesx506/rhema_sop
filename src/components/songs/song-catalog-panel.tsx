@@ -240,7 +240,7 @@ export function SongCatalogPanel() {
         </div>
       </div>
 
-      <ScrollArea className="min-h-0 flex-1">
+      <ScrollArea className="min-h-0 flex-1 [&_[data-radix-scroll-area-viewport]>div]:!block [&_[data-radix-scroll-area-viewport]>div]:w-full">
         <div className="flex flex-col gap-0.5 p-1.5">
           {filtered.length === 0 && (
             <p className="p-4 text-center text-xs text-muted-foreground">

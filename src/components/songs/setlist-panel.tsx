@@ -73,7 +73,7 @@ function SetlistEntryGroup({
   return (
     <div className="flex flex-col gap-0.5">
       <div className="group flex items-center gap-1.5 px-1 pt-2 pb-1">
-        <span className="flex-1 truncate text-[0.6875rem] font-semibold tracking-wide text-muted-foreground uppercase">
+        <span className="min-w-0 flex-1 truncate text-[0.6875rem] font-semibold tracking-wide text-muted-foreground uppercase">
           {entry.title}
         </span>
         <Button
@@ -167,7 +167,7 @@ export function SetlistPanel() {
         </div>
       )}
 
-      <ScrollArea className="min-h-0 flex-1">
+      <ScrollArea className="min-h-0 flex-1 [&_[data-radix-scroll-area-viewport]>div]:!block [&_[data-radix-scroll-area-viewport]>div]:w-full">
         <div className="flex flex-col gap-1 p-1.5">
           {setlist.length === 0 && (
             <p className="p-4 text-center text-xs text-muted-foreground">

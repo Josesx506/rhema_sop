@@ -35,9 +35,6 @@ function DeckThumbnails({
   liveDataUrl: string | null
   playing: boolean
 }) {
-  // Single click previews (no effect on live output); double click goes
-  // live immediately, preserving the previous single-click behavior
-  // (re-basing the auto-advance loop when it's running).
   // Single click presents (re-basing the loop when playing) — same
   // convention as Scripture-mode queue rows and song blocks, one click per
   // slide. ⌥-click previews without touching the output.
@@ -269,7 +266,7 @@ export function DeckPanel() {
         </div>
       )}
 
-      <ScrollArea className="min-h-0 flex-1">
+      <ScrollArea className="min-h-0 flex-1 [&_[data-radix-scroll-area-viewport]>div]:!block [&_[data-radix-scroll-area-viewport]>div]:w-full">
         {decks.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-1 p-6 text-center">
             <p className="text-xs text-muted-foreground">
