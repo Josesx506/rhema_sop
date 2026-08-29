@@ -16,13 +16,15 @@
  *   deadlocks WKWebView. Same reason for isOffscreenCanvasSupported: false,
  *   useWasm: false (wasm image decoding wedged the worker on the first
  *   image-heavy page), and useWorkerFetch: false.
- * - NO WEB WORKER AT ALL: WKWebView's worker message channel proved broken
- *   for pdf.js font/glyph traffic — the first text-heavy page either
- *   wedged the render or "succeeded" instantly with every glyph silently
- *   dropped. Importing the worker module into the main thread makes pdf.js
- *   run in-process (globalThis.pdfjsWorker), removing the channel entirely.
- *   Watchdogs and the fresh-document-per-page retry are kept as generic
- *   safety nets.
+ * - THE root cause of hangs and vanishing text was WKWebView (macOS 14)
+ *   lacking ES2024 ArrayBuffer.transfer/transferToFixedLength, which the
+ *   pdf.js worker calls while building page operator lists — the throw
+ *   truncated every page's ops after the background/images, dropping all
+ *   text, or wedged the render outright. The polyfill must live INSIDE
+ *   the worker scope, so the primary path uses a dedicated worker built
+ *   from pdf-worker-bootstrap.ts (polyfill first, then the pdf.js worker
+ *   module). A worker-less main-thread mode remains as fallback, and
+ *   watchdogs + the fresh-document-per-page retry stay as safety nets.
  * - getDocument({data}) can transfer/detach the buffer, so every
  *   getDocument call gets its own copy of the bytes.
  *
@@ -135,41 +137,86 @@ async function renderPageToDataUrl(
     PAGE_RENDER_TIMEOUT_MS,
     label
   )
-  const dataUrl = canvas.toDataURL("image/jpeg", 0.85)
+  // toBlob + FileReader instead of toDataURL: both encode on the main
+  // thread, but the async API yields between steps so input events keep
+  // flowing during image-heavy imports.
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => {
+        if (!blob) {
+          reject(new Error("JPEG encoding failed"))
+          return
+        }
+        const reader = new FileReader()
+        reader.onload = () => resolve(reader.result as string)
+        reader.onerror = () => reject(new Error("JPEG encoding failed (read)"))
+        reader.readAsDataURL(blob)
+      },
+      "image/jpeg",
+      0.85
+    )
+  })
   log(`${label} ok in ${Math.round(performance.now() - started)}ms`)
+  // Breathe: give the event loop a turn between pages so the UI stays
+  // responsive even when rendering happens on the main thread (fallback).
+  await new Promise((resolve) => setTimeout(resolve, 0))
   return dataUrl
 }
 
-/** Fast path: one document / one worker for every page. */
-async function renderAllPagesSharedDoc(
+/**
+ * Primary path: a dedicated Worker built from pdf-worker-bootstrap.ts, so
+ * the ArrayBuffer polyfill exists inside the worker scope and all parsing/
+ * rasterization prep runs OFF the UI thread.
+ */
+async function renderAllPagesDedicatedWorker(
   pdfjsLib: PdfJs,
   bytes: Uint8Array,
   onProgress?: (done: number, total: number) => void
 ): Promise<string[]> {
-  const doc = await withTimeout(
-    pdfjsLib.getDocument({ data: bytes.slice(), ...DOC_OPTIONS }).promise,
-    DOC_OPEN_TIMEOUT_MS,
-    "Opening the PDF"
+  const workerThread = new Worker(
+    new URL("./pdf-worker-bootstrap.ts", import.meta.url),
+    { type: "module" }
   )
-  log(`document opened: ${doc.numPages} pages`)
+  // The runtime accepts a Worker as `port` (verified in the dist source:
+  // `if (port) { ... #initializeFromPort(port) }`) — pdfjs-dist's
+  // JSDoc-generated typings wrongly declare it `null | undefined`.
+  const pdfWorker = new pdfjsLib.PDFWorker({
+    port: workerThread as unknown as null,
+  })
   try {
-    const pages: string[] = []
-    for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber++) {
-      const page = await withTimeout(
-        doc.getPage(pageNumber),
-        PAGE_RENDER_TIMEOUT_MS,
-        `Loading page ${pageNumber}/${doc.numPages}`
-      )
-      pages.push(
-        await renderPageToDataUrl(page, `Rendering page ${pageNumber}/${doc.numPages}`)
-      )
-      onProgress?.(pageNumber, doc.numPages)
+    const doc = await withTimeout(
+      pdfjsLib.getDocument({ data: bytes.slice(), worker: pdfWorker, ...DOC_OPTIONS })
+        .promise,
+      DOC_OPEN_TIMEOUT_MS,
+      "Opening the PDF"
+    )
+    log(`document opened: ${doc.numPages} pages (dedicated worker)`)
+    try {
+      const pages: string[] = []
+      for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber++) {
+        const page = await withTimeout(
+          doc.getPage(pageNumber),
+          PAGE_RENDER_TIMEOUT_MS,
+          `Loading page ${pageNumber}/${doc.numPages}`
+        )
+        pages.push(
+          await renderPageToDataUrl(
+            page,
+            `Rendering page ${pageNumber}/${doc.numPages}`
+          )
+        )
+        onProgress?.(pageNumber, doc.numPages)
+      }
+      return pages
+    } finally {
+      void doc.loadingTask.destroy().catch(() => {})
     }
-    return pages
   } finally {
-    void doc.loadingTask.destroy().catch(() => {})
+    pdfWorker.destroy()
+    workerThread.terminate()
   }
 }
+
 
 /**
  * Fallback: a fresh document (and therefore a fresh worker) per page.
@@ -254,29 +301,28 @@ export async function importPdfDeck(
 
   try {
     const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs")
-    // NO Worker at all: importing the worker module into the MAIN thread
-    // makes pdf.js run everything in-process (it checks
-    // globalThis.pdfjsWorker before ever constructing a Worker). WKWebView's
-    // worker message channel proved broken for font/glyph traffic — the
-    // first text-heavy page either wedged the render (fast-path hangs) or
-    // "rendered" instantly with every glyph silently dropped. With no
-    // channel there is nothing to wedge and nothing to drop.
-    await import("pdfjs-dist/legacy/build/pdf.worker.mjs")
     // Pipeline version marker: proves in exported logs WHICH import code a
     // session ran (session decks imported by older code look broken even
     // after an update until the app restarts and the deck is reimported).
     log(
-      `pipeline v6 (ArrayBuffer.transfer polyfill, main-thread, glyph paths, white-bg, font-pack) — pdfjs ${pdfjsLib.version ?? "?"}, fake worker: ${Boolean((globalThis as Record<string, unknown>).pdfjsWorker)}`
+      `pipeline v7 (dedicated polyfilled worker; main-thread fallback) — pdfjs ${pdfjsLib.version ?? "?"}`
     )
 
     try {
-      return { name, pages: await renderAllPagesSharedDoc(pdfjsLib, bytes, onProgress) }
+      // Primary: dedicated worker (bootstrap bundles the ArrayBuffer
+      // polyfill into the worker scope) — rendering prep stays off the UI
+      // thread, so image-heavy imports don't freeze the mouse.
+      return {
+        name,
+        pages: await renderAllPagesDedicatedWorker(pdfjsLib, bytes, onProgress),
+      }
     } catch (err) {
-      // A stall in the shared-worker fast path is the known WKWebView
-      // failure mode — retry with an isolated worker per page before
-      // giving up. Other errors (corrupt file, etc.) also get one retry;
-      // harmless, and it keeps the recovery logic simple.
-      console.error(`[pdf-import] fast path failed: ${String(err)}`)
+      // Fallback: worker-less main-thread mode (globalThis.pdfjsWorker) —
+      // slower and jankier, but with no message channel there is nothing
+      // left to fail the same way.
+      console.error(`[pdf-import] dedicated worker path failed: ${String(err)}`)
+      await import("pdfjs-dist/legacy/build/pdf.worker.mjs")
+      log("fallback: main-thread (worker-less) mode")
       return {
         name,
         pages: await renderAllPagesFreshDocPerPage(pdfjsLib, bytes, onProgress),
