@@ -1,10 +1,13 @@
 import { LiveOutputPanel } from "@/components/panels/live-output-panel"
 import { DeckPanel } from "@/components/slides/deck-panel"
+import { SlidePreviewPanel } from "@/components/slides/slide-preview-panel"
 import { MediaPanel } from "@/components/media/media-panel"
 
 /**
  * Presentation mode layout (fork feature): slide decks | media loops |
- * live output. Owns the grid; the panels are owned by their modules.
+ * preview + live output. Owns the grid; the panels are owned by their
+ * modules. The right column stacks the preview-before-live panel above the
+ * live output so operators can stage a slide before it hits the display.
  */
 export function PresentationMode() {
   return (
@@ -17,7 +20,13 @@ export function PresentationMode() {
     >
       <DeckPanel />
       <MediaPanel />
-      <LiveOutputPanel />
+      <div
+        className="grid min-h-0 gap-3 *:min-h-0"
+        style={{ gridTemplateRows: "minmax(0,1fr) minmax(0,1fr)" }}
+      >
+        <SlidePreviewPanel />
+        <LiveOutputPanel />
+      </div>
     </div>
   )
 }

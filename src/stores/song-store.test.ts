@@ -225,7 +225,7 @@ describe("song store presentation", () => {
     expect(useSongStore.getState().activeBlockId).toBe(block.id)
     expect(setLiveVerseMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        reference: "Amazing Grace — Chorus",
+        footerLabel: "Amazing Grace",
         segments: [{ text: "sing" }],
         noAutoFade: true,
       })
@@ -265,36 +265,36 @@ describe("song store presentation", () => {
     // Starting with no active block, next() should present the very first block.
     useSongStore.getState().nextBlock()
     expect(setLiveVerseMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({ reference: "Song A — Verse 1" })
+      expect.objectContaining({ footerLabel: "Song A", segments: [{ text: "a1" }] })
     )
 
     useSongStore.getState().nextBlock()
     expect(setLiveVerseMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({ reference: "Song A — Chorus" })
+      expect.objectContaining({ footerLabel: "Song A", segments: [{ text: "a2" }] })
     )
 
     // Crosses from song A's last block into song B's first block.
     useSongStore.getState().nextBlock()
     expect(setLiveVerseMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({ reference: "Song B — Verse 1" })
+      expect.objectContaining({ footerLabel: "Song B", segments: [{ text: "b1" }] })
     )
 
     // Already at the last block overall — clamps, does not throw or wrap.
     useSongStore.getState().nextBlock()
     expect(setLiveVerseMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({ reference: "Song B — Verse 1" })
+      expect.objectContaining({ footerLabel: "Song B", segments: [{ text: "b1" }] })
     )
 
     // Step back across the entry boundary.
     useSongStore.getState().prevBlock()
     expect(setLiveVerseMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({ reference: "Song A — Chorus" })
+      expect.objectContaining({ footerLabel: "Song A", segments: [{ text: "a2" }] })
     )
 
     useSongStore.getState().prevBlock()
     useSongStore.getState().prevBlock()
     expect(setLiveVerseMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({ reference: "Song A — Verse 1" })
+      expect.objectContaining({ footerLabel: "Song A", segments: [{ text: "a1" }] })
     )
   })
 
@@ -304,6 +304,212 @@ describe("song store presentation", () => {
     useSongStore.getState().prevBlock()
     expect(setLiveVerseMock).not.toHaveBeenCalled()
     expect(useSongStore.getState().activeBlockId).toBeNull()
+  })
+
+  it("presentBlock syncs the preview selection to the presented block", async () => {
+    const { useSongStore } = await import("./song-store")
+    const song = makeSong({ sections: [makeSection({ label: "Chorus" })], arrangement: [] })
+    useSongStore.setState({ songs: [song] })
+    useSongStore.getState().addSongToSetlist(song.id)
+    const entry = useSongStore.getState().setlist[0]
+    const block = entry.blocks[0]
+
+    useSongStore.getState().presentBlock(entry.id, block.id)
+
+    expect(useSongStore.getState().previewEntryId).toBe(entry.id)
+    expect(useSongStore.getState().previewBlockId).toBe(block.id)
+  })
+})
+
+describe("song store preview selection", () => {
+  beforeEach(() => {
+    vi.resetModules()
+    setLiveVerseMock.mockReset()
+  })
+
+  it("addSongToSetlist previews the first block of the newly added song when nothing is previewed yet", async () => {
+    const { useSongStore } = await import("./song-store")
+    const song = makeSong({ sections: [makeSection({ label: "Verse 1" })], arrangement: [] })
+    useSongStore.setState({ songs: [song] })
+
+    useSongStore.getState().addSongToSetlist(song.id)
+
+    const entry = useSongStore.getState().setlist[0]
+    expect(useSongStore.getState().previewEntryId).toBe(entry.id)
+    expect(useSongStore.getState().previewBlockId).toBe(entry.blocks[0].id)
+    // Adding to the setlist must never touch the live output.
+    expect(setLiveVerseMock).not.toHaveBeenCalled()
+  })
+
+  it("addSongToSetlist does not disturb an existing preview selection", async () => {
+    const { useSongStore } = await import("./song-store")
+    const songA = makeSong({ title: "A", sections: [makeSection({ label: "Verse 1" })], arrangement: [] })
+    const songB = makeSong({ title: "B", sections: [makeSection({ label: "Verse 1" })], arrangement: [] })
+    useSongStore.setState({ songs: [songA, songB] })
+    useSongStore.getState().addSongToSetlist(songA.id)
+    const entryA = useSongStore.getState().setlist[0]
+    const chosenBlock = entryA.blocks[0]
+    useSongStore.getState().previewBlock(entryA.id, chosenBlock.id)
+
+    useSongStore.getState().addSongToSetlist(songB.id)
+
+    expect(useSongStore.getState().previewEntryId).toBe(entryA.id)
+    expect(useSongStore.getState().previewBlockId).toBe(chosenBlock.id)
+  })
+
+  it("previewBlock sets the preview ids without touching activeBlockId or calling setLiveVerse", async () => {
+    const { useSongStore } = await import("./song-store")
+    const song = makeSong({ sections: [makeSection({ label: "Chorus" })], arrangement: [] })
+    useSongStore.setState({ songs: [song] })
+    useSongStore.getState().addSongToSetlist(song.id)
+    const entry = useSongStore.getState().setlist[0]
+    const block = entry.blocks[0]
+
+    useSongStore.getState().previewBlock(entry.id, block.id)
+
+    expect(useSongStore.getState().previewEntryId).toBe(entry.id)
+    expect(useSongStore.getState().previewBlockId).toBe(block.id)
+    expect(useSongStore.getState().activeBlockId).toBeNull()
+    expect(setLiveVerseMock).not.toHaveBeenCalled()
+  })
+
+  it("previewBlock is a no-op for an unknown entry or block id", async () => {
+    const { useSongStore } = await import("./song-store")
+    const song = makeSong({ sections: [makeSection()], arrangement: [] })
+    useSongStore.setState({ songs: [song] })
+    useSongStore.getState().addSongToSetlist(song.id)
+    // Clear the auto-preview from addSongToSetlist so we can assert the no-op cleanly.
+    useSongStore.setState({ previewEntryId: null, previewBlockId: null })
+    const entry = useSongStore.getState().setlist[0]
+
+    useSongStore.getState().previewBlock("bogus-entry", entry.blocks[0].id)
+    useSongStore.getState().previewBlock(entry.id, "bogus-block")
+
+    expect(useSongStore.getState().previewEntryId).toBeNull()
+    expect(useSongStore.getState().previewBlockId).toBeNull()
+  })
+
+  it("previewNext/previewPrev step across the flattened block list without presenting", async () => {
+    const { useSongStore } = await import("./song-store")
+    const songA = makeSong({
+      title: "Song A",
+      sections: [makeSection({ label: "Verse 1", lines: ["a1"] }), makeSection({ label: "Chorus", lines: ["a2"] })],
+    })
+    songA.arrangement = songA.sections.map((s) => s.id)
+    const songB = makeSong({
+      title: "Song B",
+      sections: [makeSection({ label: "Verse 1", lines: ["b1"] })],
+    })
+    songB.arrangement = songB.sections.map((s) => s.id)
+    useSongStore.setState({ songs: [songA, songB] })
+    useSongStore.getState().addSongToSetlist(songA.id)
+    useSongStore.getState().addSongToSetlist(songB.id)
+    const [entryA, entryB] = useSongStore.getState().setlist
+
+    // addSongToSetlist already previewed Song A's first block.
+    expect(useSongStore.getState().previewBlockId).toBe(entryA.blocks[0].id)
+
+    useSongStore.getState().previewNext()
+    expect(useSongStore.getState().previewEntryId).toBe(entryA.id)
+    expect(useSongStore.getState().previewBlockId).toBe(entryA.blocks[1].id)
+
+    // Crosses from song A's last block into song B's first block.
+    useSongStore.getState().previewNext()
+    expect(useSongStore.getState().previewEntryId).toBe(entryB.id)
+    expect(useSongStore.getState().previewBlockId).toBe(entryB.blocks[0].id)
+
+    // Already at the last block overall — clamps, does not wrap.
+    useSongStore.getState().previewNext()
+    expect(useSongStore.getState().previewBlockId).toBe(entryB.blocks[0].id)
+
+    useSongStore.getState().previewPrev()
+    expect(useSongStore.getState().previewEntryId).toBe(entryA.id)
+    expect(useSongStore.getState().previewBlockId).toBe(entryA.blocks[1].id)
+
+    useSongStore.getState().previewPrev()
+    useSongStore.getState().previewPrev()
+    expect(useSongStore.getState().previewBlockId).toBe(entryA.blocks[0].id)
+
+    // Never touches the live output.
+    expect(setLiveVerseMock).not.toHaveBeenCalled()
+  })
+
+  it("previewNext/previewPrev are no-ops on an empty setlist", async () => {
+    const { useSongStore } = await import("./song-store")
+    useSongStore.getState().previewNext()
+    useSongStore.getState().previewPrev()
+    expect(useSongStore.getState().previewEntryId).toBeNull()
+    expect(useSongStore.getState().previewBlockId).toBeNull()
+  })
+
+  it("presentPreviewed presents whatever block is currently previewed", async () => {
+    const { useSongStore } = await import("./song-store")
+    const song = makeSong({
+      title: "Song A",
+      sections: [makeSection({ label: "Verse 1" }), makeSection({ label: "Chorus" })],
+    })
+    song.arrangement = song.sections.map((s) => s.id)
+    useSongStore.setState({ songs: [song] })
+    useSongStore.getState().addSongToSetlist(song.id)
+    const entry = useSongStore.getState().setlist[0]
+    useSongStore.getState().previewBlock(entry.id, entry.blocks[1].id)
+
+    useSongStore.getState().presentPreviewed()
+
+    expect(useSongStore.getState().activeBlockId).toBe(entry.blocks[1].id)
+    expect(setLiveVerseMock).toHaveBeenCalledWith(
+      expect.objectContaining({ footerLabel: "Song A", segments: [{ text: "line a" }, { text: "line b" }] })
+    )
+  })
+
+  it("presentPreviewed is a no-op when nothing is previewed", async () => {
+    const { useSongStore } = await import("./song-store")
+    useSongStore.getState().presentPreviewed()
+    expect(setLiveVerseMock).not.toHaveBeenCalled()
+    expect(useSongStore.getState().activeBlockId).toBeNull()
+  })
+
+  it("removeEntry clears a dangling preview selection that belonged to the removed entry", async () => {
+    const { useSongStore } = await import("./song-store")
+    const song = makeSong({ sections: [makeSection()], arrangement: [] })
+    useSongStore.setState({ songs: [song] })
+    useSongStore.getState().addSongToSetlist(song.id)
+    const entry = useSongStore.getState().setlist[0]
+    expect(useSongStore.getState().previewBlockId).toBe(entry.blocks[0].id)
+
+    useSongStore.getState().removeEntry(entry.id)
+
+    expect(useSongStore.getState().previewEntryId).toBeNull()
+    expect(useSongStore.getState().previewBlockId).toBeNull()
+  })
+
+  it("removeEntry leaves an unrelated preview selection untouched", async () => {
+    const { useSongStore } = await import("./song-store")
+    const songA = makeSong({ title: "A", sections: [makeSection()], arrangement: [] })
+    const songB = makeSong({ title: "B", sections: [makeSection()], arrangement: [] })
+    useSongStore.setState({ songs: [songA, songB] })
+    useSongStore.getState().addSongToSetlist(songA.id)
+    useSongStore.getState().addSongToSetlist(songB.id)
+    const [entryA, entryB] = useSongStore.getState().setlist
+    // Preview selection defaulted to entry A's first block; keep it there.
+    expect(useSongStore.getState().previewEntryId).toBe(entryA.id)
+
+    useSongStore.getState().removeEntry(entryB.id)
+
+    expect(useSongStore.getState().previewEntryId).toBe(entryA.id)
+    expect(useSongStore.getState().previewBlockId).toBe(entryA.blocks[0].id)
+  })
+
+  it("clearSetlist clears the preview selection along with the setlist", async () => {
+    const { useSongStore } = await import("./song-store")
+    const song = makeSong({ sections: [makeSection()], arrangement: [] })
+    useSongStore.setState({ songs: [song] })
+    useSongStore.getState().addSongToSetlist(song.id)
+
+    useSongStore.getState().clearSetlist()
+
+    expect(useSongStore.getState().previewEntryId).toBeNull()
+    expect(useSongStore.getState().previewBlockId).toBeNull()
   })
 })
 

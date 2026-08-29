@@ -16,13 +16,31 @@ function isTypingTarget(target: EventTarget | null): boolean {
   )
 }
 
-function BlockRow({ block, isActive, onClick }: { block: SongBlock; isActive: boolean; onClick: () => void }) {
+function BlockRow({
+  block,
+  isLive,
+  isPreviewed,
+  onClick,
+  onDoubleClick,
+}: {
+  block: SongBlock
+  isLive: boolean
+  isPreviewed: boolean
+  onClick: () => void
+  onDoubleClick: () => void
+}) {
   return (
     <div
       onClick={onClick}
+      onDoubleClick={onDoubleClick}
       className={cn(
         "flex cursor-pointer flex-col gap-0.5 rounded-md px-2.5 py-1.5 transition-colors",
-        isActive ? "border border-primary/30 bg-primary/10 ring-1 ring-primary/40" : "hover:bg-muted/50"
+        // Live styling is dominant when a row is both previewed and live.
+        isLive
+          ? "border border-primary/30 bg-primary/10 ring-1 ring-primary/40"
+          : isPreviewed
+            ? "border border-sky-400/40 bg-sky-400/5"
+            : "hover:bg-muted/50"
       )}
     >
       <span className="text-xs font-medium text-foreground">{block.label}</span>
@@ -36,11 +54,15 @@ function BlockRow({ block, isActive, onClick }: { block: SongBlock; isActive: bo
 function SetlistEntryGroup({
   entry,
   activeBlockId,
+  previewBlockId,
+  onPreview,
   onPresent,
   onRemove,
 }: {
   entry: SetlistEntry
   activeBlockId: string | null
+  previewBlockId: string | null
+  onPreview: (blockId: string) => void
   onPresent: (blockId: string) => void
   onRemove: () => void
 }) {
@@ -63,8 +85,10 @@ function SetlistEntryGroup({
         <BlockRow
           key={block.id}
           block={block}
-          isActive={block.id === activeBlockId}
-          onClick={() => onPresent(block.id)}
+          isLive={block.id === activeBlockId}
+          isPreviewed={block.id === previewBlockId}
+          onClick={() => onPreview(block.id)}
+          onDoubleClick={() => onPresent(block.id)}
         />
       ))}
     </div>
@@ -74,6 +98,7 @@ function SetlistEntryGroup({
 export function SetlistPanel() {
   const setlist = useSongStore((s) => s.setlist)
   const activeBlockId = useSongStore((s) => s.activeBlockId)
+  const previewBlockId = useSongStore((s) => s.previewBlockId)
   const songs = useSongStore((s) => s.songs)
 
   const activeEntry = setlist.find((e) => e.blocks.some((b) => b.id === activeBlockId))
@@ -84,10 +109,13 @@ export function SetlistPanel() {
       if (isTypingTarget(e.target)) return
       if (e.key === "ArrowRight" || e.key === "ArrowDown") {
         e.preventDefault()
-        useSongStore.getState().nextBlock()
+        useSongStore.getState().previewNext()
       } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
         e.preventDefault()
-        useSongStore.getState().prevBlock()
+        useSongStore.getState().previewPrev()
+      } else if (e.key === "Enter") {
+        e.preventDefault()
+        useSongStore.getState().presentPreviewed()
       }
     }
     document.addEventListener("keydown", handleKeyDown)
@@ -134,6 +162,8 @@ export function SetlistPanel() {
               key={entry.id}
               entry={entry}
               activeBlockId={activeBlockId}
+              previewBlockId={previewBlockId}
+              onPreview={(blockId) => useSongStore.getState().previewBlock(entry.id, blockId)}
               onPresent={(blockId) => useSongStore.getState().presentBlock(entry.id, blockId)}
               onRemove={() => useSongStore.getState().removeEntry(entry.id)}
             />

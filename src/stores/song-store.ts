@@ -20,6 +20,11 @@ interface SongState {
   setlist: SetlistEntry[]
   activeBlockId: string | null
 
+  // Preview selection (session-only, never persisted). Independent of what's
+  // live — operators browse the preview before committing it to air.
+  previewEntryId: string | null
+  previewBlockId: string | null
+
   // Catalog CRUD
   addSong: (input: Omit<Song, "id" | "createdAt" | "updatedAt">) => Song
   updateSong: (id: string, patch: Partial<Omit<Song, "id">>) => void
@@ -39,6 +44,12 @@ interface SongState {
   presentBlock: (entryId: string, blockId: string) => void
   nextBlock: () => void
   prevBlock: () => void
+
+  // Preview
+  previewBlock: (entryId: string, blockId: string) => void
+  previewNext: () => void
+  previewPrev: () => void
+  presentPreviewed: () => void
 }
 
 /** Case-insensitive match on title, artist, or any lyric line. */
@@ -59,6 +70,8 @@ export const useSongStore = create<SongState>((set, get) => ({
   searchQuery: "",
   setlist: [],
   activeBlockId: null,
+  previewEntryId: null,
+  previewBlockId: null,
 
   addSong: (input) => {
     const now = Date.now()
@@ -83,18 +96,31 @@ export const useSongStore = create<SongState>((set, get) => ({
       title: song.title,
       blocks: expandSong(song),
     }
-    set((s) => ({ setlist: [...s.setlist, entry] }))
+    set((s) => {
+      // Give the operator something to look at right away: if nothing is
+      // previewed yet, default the preview to this song's first block.
+      const shouldPreviewFirst = s.previewBlockId === null && entry.blocks.length > 0
+      return {
+        setlist: [...s.setlist, entry],
+        ...(shouldPreviewFirst
+          ? { previewEntryId: entry.id, previewBlockId: entry.blocks[0].id }
+          : {}),
+      }
+    })
   },
   removeEntry: (entryId) =>
     set((s) => {
       const removed = s.setlist.find((e) => e.id === entryId)
       const activeWasInRemoved = removed?.blocks.some((b) => b.id === s.activeBlockId) ?? false
+      const previewWasInRemoved = s.previewEntryId === entryId
       return {
         setlist: s.setlist.filter((e) => e.id !== entryId),
         activeBlockId: activeWasInRemoved ? null : s.activeBlockId,
+        previewEntryId: previewWasInRemoved ? null : s.previewEntryId,
+        previewBlockId: previewWasInRemoved ? null : s.previewBlockId,
       }
     }),
-  clearSetlist: () => set({ setlist: [], activeBlockId: null }),
+  clearSetlist: () => set({ setlist: [], activeBlockId: null, previewEntryId: null, previewBlockId: null }),
   reorderEntries: (fromIndex, toIndex) =>
     set((s) => {
       if (
@@ -116,7 +142,9 @@ export const useSongStore = create<SongState>((set, get) => ({
     const entry = get().setlist.find((e) => e.id === entryId)
     const block = entry?.blocks.find((b) => b.id === blockId)
     if (!entry || !block) return
-    set({ activeBlockId: block.id })
+    // Presenting also syncs the preview selection, so Enter/arrow-key
+    // browsing continues from whatever just went on air.
+    set({ activeBlockId: block.id, previewEntryId: entryId, previewBlockId: block.id })
     useBroadcastStore.getState().setLiveVerse(blockToRenderData(entry.title, block))
   },
   nextBlock: () => {
@@ -136,6 +164,36 @@ export const useSongStore = create<SongState>((set, get) => ({
     const prevIndex = currentIndex === -1 ? 0 : Math.max(currentIndex - 1, 0)
     const target = flat[prevIndex]
     get().presentBlock(target.entryId, target.block.id)
+  },
+
+  previewBlock: (entryId, blockId) => {
+    const entry = get().setlist.find((e) => e.id === entryId)
+    const block = entry?.blocks.find((b) => b.id === blockId)
+    if (!entry || !block) return
+    set({ previewEntryId: entryId, previewBlockId: block.id })
+  },
+  previewNext: () => {
+    const { setlist, previewBlockId } = get()
+    const flat = flattenSetlistBlocks(setlist)
+    if (flat.length === 0) return
+    const currentIndex = flat.findIndex((f) => f.block.id === previewBlockId)
+    const nextIndex = currentIndex === -1 ? 0 : Math.min(currentIndex + 1, flat.length - 1)
+    const target = flat[nextIndex]
+    set({ previewEntryId: target.entryId, previewBlockId: target.block.id })
+  },
+  previewPrev: () => {
+    const { setlist, previewBlockId } = get()
+    const flat = flattenSetlistBlocks(setlist)
+    if (flat.length === 0) return
+    const currentIndex = flat.findIndex((f) => f.block.id === previewBlockId)
+    const prevIndex = currentIndex === -1 ? 0 : Math.max(currentIndex - 1, 0)
+    const target = flat[prevIndex]
+    set({ previewEntryId: target.entryId, previewBlockId: target.block.id })
+  },
+  presentPreviewed: () => {
+    const { previewEntryId, previewBlockId } = get()
+    if (!previewEntryId || !previewBlockId) return
+    get().presentBlock(previewEntryId, previewBlockId)
   },
 }))
 

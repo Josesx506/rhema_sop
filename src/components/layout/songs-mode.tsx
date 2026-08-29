@@ -1,9 +1,10 @@
 import { LiveOutputPanel } from "@/components/panels/live-output-panel"
 import { SongCatalogPanel } from "@/components/songs/song-catalog-panel"
 import { SetlistPanel } from "@/components/songs/setlist-panel"
+import { SongPreviewPanel } from "@/components/songs/song-preview-panel"
 
 /**
- * Songs mode layout (fork feature): catalog | setlist+blocks | live output.
+ * Songs mode layout (fork feature): catalog | setlist+blocks | preview/live.
  * Owns the grid; the panels it mounts are owned by the songs module.
  */
 export function SongsMode() {
@@ -17,7 +18,13 @@ export function SongsMode() {
     >
       <SongCatalogPanel />
       <SetlistPanel />
-      <LiveOutputPanel />
+      <div
+        className="grid min-h-0 gap-3"
+        style={{ gridTemplateRows: "minmax(0, 1fr) minmax(0, 1fr)" }}
+      >
+        <SongPreviewPanel />
+        <LiveOutputPanel />
+      </div>
     </div>
   )
 }

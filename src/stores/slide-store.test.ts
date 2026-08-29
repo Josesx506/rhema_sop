@@ -5,6 +5,28 @@ const { presentSlideMock, clearPresentationMock } = vi.hoisted(() => ({
   clearPresentationMock: vi.fn(),
 }))
 
+const { importPdfDeckMock } = vi.hoisted(() => ({
+  importPdfDeckMock: vi.fn(),
+}))
+
+const { toastSuccessMock, toastErrorMock, toastInfoMock } = vi.hoisted(() => ({
+  toastSuccessMock: vi.fn(),
+  toastErrorMock: vi.fn(),
+  toastInfoMock: vi.fn(),
+}))
+
+vi.mock("@/lib/slides/pdf-import", () => ({
+  importPdfDeck: importPdfDeckMock,
+}))
+
+vi.mock("sonner", () => ({
+  toast: {
+    success: toastSuccessMock,
+    error: toastErrorMock,
+    info: toastInfoMock,
+  },
+}))
+
 // A minimal stand-in for the real zustand store: fresh state + listeners on
 // every re-import (the store test below calls vi.resetModules() between
 // cases), while presentSlideMock/clearPresentationMock stay stable so call
@@ -48,6 +70,10 @@ describe("slide store", () => {
     vi.resetModules()
     presentSlideMock.mockReset()
     clearPresentationMock.mockReset()
+    importPdfDeckMock.mockReset()
+    toastSuccessMock.mockReset()
+    toastErrorMock.mockReset()
+    toastInfoMock.mockReset()
   })
 
   afterEach(() => {
@@ -251,5 +277,129 @@ describe("slide store", () => {
     const callsAfterDisplacement = presentSlideMock.mock.calls.length
     vi.advanceTimersByTime(30000)
     expect(presentSlideMock).toHaveBeenCalledTimes(callsAfterDisplacement)
+  })
+
+  it("previewPage updates preview selection without presenting anything", async () => {
+    const { useSlideStore } = await import("./slide-store")
+    const deck = useSlideStore.getState().addDeck(makeDeck())
+
+    useSlideStore.getState().previewPage(deck.id, 1)
+
+    expect(useSlideStore.getState().previewDeckId).toBe(deck.id)
+    expect(useSlideStore.getState().previewPageIndex).toBe(1)
+    expect(useSlideStore.getState().activeDeckId).toBeNull()
+    expect(presentSlideMock).not.toHaveBeenCalled()
+  })
+
+  it("previewNext/previewPrev clamp within the previewed deck", async () => {
+    const { useSlideStore } = await import("./slide-store")
+    const deck = useSlideStore.getState().addDeck(makeDeck())
+    useSlideStore.getState().previewPage(deck.id, 2)
+
+    useSlideStore.getState().previewNext()
+    expect(useSlideStore.getState().previewPageIndex).toBe(2)
+
+    useSlideStore.getState().previewPrev()
+    useSlideStore.getState().previewPrev()
+    useSlideStore.getState().previewPrev()
+    expect(useSlideStore.getState().previewPageIndex).toBe(0)
+    expect(presentSlideMock).not.toHaveBeenCalled()
+  })
+
+  it("presentPreviewed sends the previewed page live and updates preview to match", async () => {
+    const { useSlideStore } = await import("./slide-store")
+    const deck = useSlideStore.getState().addDeck(makeDeck())
+    useSlideStore.getState().previewPage(deck.id, 2)
+
+    useSlideStore.getState().presentPreviewed()
+
+    expect(presentSlideMock).toHaveBeenCalledWith("page-3")
+    expect(useSlideStore.getState().activeDeckId).toBe(deck.id)
+    expect(useSlideStore.getState().activePageIndex).toBe(2)
+    expect(useSlideStore.getState().previewDeckId).toBe(deck.id)
+    expect(useSlideStore.getState().previewPageIndex).toBe(2)
+  })
+
+  it("presentPage (double-click path) still re-bases the loop and syncs the preview", async () => {
+    vi.useFakeTimers()
+    const { useSlideStore } = await import("./slide-store")
+    const deck = useSlideStore.getState().addDeck(makeDeck())
+    useSlideStore.getState().updateDeckSettings(deck.id, { intervalMs: 1000 })
+    useSlideStore.getState().startLoop(deck.id)
+
+    vi.advanceTimersByTime(600)
+    useSlideStore.getState().presentPage(deck.id, 2)
+    expect(useSlideStore.getState().activePageIndex).toBe(2)
+    expect(useSlideStore.getState().previewPageIndex).toBe(2)
+
+    // Old timer would have fired at 1000ms; it should have been re-based to
+    // fire 1000ms after the manual jump instead.
+    vi.advanceTimersByTime(400)
+    expect(useSlideStore.getState().activePageIndex).toBe(2)
+
+    vi.advanceTimersByTime(600)
+    expect(useSlideStore.getState().activePageIndex).toBe(0)
+  })
+
+  it("importDeck sets importing/progress, adds the deck on success, and toasts", async () => {
+    let resolveImport: (value: { name: string; pages: string[] } | null) => void = () => {}
+    importPdfDeckMock.mockImplementation(
+      (onProgress?: (done: number, total: number) => void) =>
+        new Promise((resolve) => {
+          resolveImport = resolve
+          onProgress?.(1, 2)
+        })
+    )
+
+    const { useSlideStore } = await import("./slide-store")
+
+    const importing = useSlideStore.getState().importDeck()
+    expect(useSlideStore.getState().importing).toBe(true)
+    expect(useSlideStore.getState().importProgress).toEqual({ done: 1, total: 2 })
+
+    resolveImport({ name: "Announcements", pages: ["a", "b"] })
+    await importing
+
+    expect(useSlideStore.getState().importing).toBe(false)
+    expect(useSlideStore.getState().importProgress).toBeNull()
+    expect(useSlideStore.getState().decks).toHaveLength(1)
+    expect(useSlideStore.getState().decks[0].pages).toEqual(["a", "b"])
+    expect(toastSuccessMock).toHaveBeenCalledTimes(1)
+    expect(toastErrorMock).not.toHaveBeenCalled()
+  })
+
+  it("importDeck toasts an error and resets state on failure without adding a deck", async () => {
+    importPdfDeckMock.mockRejectedValue(new Error("boom"))
+    const { useSlideStore } = await import("./slide-store")
+
+    await useSlideStore.getState().importDeck()
+
+    expect(useSlideStore.getState().importing).toBe(false)
+    expect(useSlideStore.getState().importProgress).toBeNull()
+    expect(useSlideStore.getState().decks).toHaveLength(0)
+    expect(toastErrorMock).toHaveBeenCalledTimes(1)
+    expect(toastSuccessMock).not.toHaveBeenCalled()
+  })
+
+  it("a second importDeck call while one is running is a no-op", async () => {
+    let resolveImport: (value: { name: string; pages: string[] } | null) => void = () => {}
+    importPdfDeckMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveImport = resolve
+        })
+    )
+    const { useSlideStore } = await import("./slide-store")
+
+    const first = useSlideStore.getState().importDeck()
+    const second = useSlideStore.getState().importDeck()
+
+    expect(importPdfDeckMock).toHaveBeenCalledTimes(1)
+    expect(toastInfoMock).toHaveBeenCalledTimes(1)
+
+    resolveImport({ name: "Announcements", pages: ["a"] })
+    await Promise.all([first, second])
+
+    expect(useSlideStore.getState().decks).toHaveLength(1)
   })
 })

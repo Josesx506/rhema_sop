@@ -14,6 +14,10 @@ import { readFile } from "@tauri-apps/plugin-fs"
 /** Longest side of a rendered page image, in pixels. */
 const MAX_SIDE = 1920
 
+/** How many pages render concurrently. Keeps memory/CPU bounded while still
+ * getting most of the parallelism win over rendering strictly serially. */
+const RENDER_CONCURRENCY = 4
+
 export interface ImportedDeck {
   name: string
   pages: string[]
@@ -27,9 +31,18 @@ function basename(path: string): string {
 /**
  * Opens a native "pick a PDF" dialog, reads it, and renders every page to a
  * JPEG data URL sized for broadcast (longest side scaled to MAX_SIDE).
+ * Pages render concurrently (small worker pool) rather than one at a time,
+ * which is the difference between a large deck taking tens of seconds vs.
+ * only a few — but the returned `pages` array is still in page order.
  * Returns null if the user cancels the dialog.
+ *
+ * `onProgress`, when given, is invoked after each page finishes rendering
+ * with (pages done so far, total pages) — pages may complete out of order
+ * under concurrency, so this is a count, not necessarily the page number.
  */
-export async function importPdfDeck(): Promise<ImportedDeck | null> {
+export async function importPdfDeck(
+  onProgress?: (done: number, total: number) => void
+): Promise<ImportedDeck | null> {
   const selected = await open({
     multiple: false,
     filters: [{ name: "PDF", extensions: ["pdf"] }],
@@ -57,9 +70,19 @@ export async function importPdfDeck(): Promise<ImportedDeck | null> {
     ).toString()
 
     const doc = await pdfjsLib.getDocument({ data: bytes }).promise
-    const pages: string[] = []
+    const total = doc.numPages
+    if (total === 0) {
+      throw new Error(`"${name}.pdf" has no pages`)
+    }
 
-    for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber++) {
+    // Page order must survive concurrency: each worker writes its result
+    // into its own page's slot rather than pushing, so `pages` comes out in
+    // page order no matter which page finishes rendering first.
+    const pages: string[] = new Array(total)
+    let done = 0
+    let nextPageNumber = 1
+
+    async function renderOnePage(pageNumber: number): Promise<void> {
       const page = await doc.getPage(pageNumber)
       const baseViewport = page.getViewport({ scale: 1 })
       const longestSide = Math.max(baseViewport.width, baseViewport.height)
@@ -75,12 +98,21 @@ export async function importPdfDeck(): Promise<ImportedDeck | null> {
       }
 
       await page.render({ canvas, canvasContext: context, viewport }).promise
-      pages.push(canvas.toDataURL("image/jpeg", 0.85))
+      pages[pageNumber - 1] = canvas.toDataURL("image/jpeg", 0.85)
+      done += 1
+      onProgress?.(done, total)
     }
 
-    if (pages.length === 0) {
-      throw new Error(`"${name}.pdf" has no pages`)
+    async function worker(): Promise<void> {
+      while (nextPageNumber <= total) {
+        const pageNumber = nextPageNumber
+        nextPageNumber += 1
+        await renderOnePage(pageNumber)
+      }
     }
+
+    const workerCount = Math.min(RENDER_CONCURRENCY, total)
+    await Promise.all(Array.from({ length: workerCount }, () => worker()))
 
     return { name, pages }
   } catch (err) {

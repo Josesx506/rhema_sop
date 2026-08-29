@@ -1,5 +1,3 @@
-import * as React from "react"
-import { toast } from "sonner"
 import {
   FileUpIcon,
   Loader2Icon,
@@ -14,7 +12,6 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
-import { importPdfDeck } from "@/lib/slides/pdf-import"
 import { useSlideStore, type SlideDeck } from "@/stores/slide-store"
 import { usePresentationOnAir } from "@/lib/presentation-broadcast"
 
@@ -25,16 +22,27 @@ function DeckThumbnails({
   deck,
   activeDeckId,
   activePageIndex,
+  previewDeckId,
+  previewPageIndex,
   liveDataUrl,
   playing,
 }: {
   deck: SlideDeck
   activeDeckId: string | null
   activePageIndex: number
+  previewDeckId: string | null
+  previewPageIndex: number
   liveDataUrl: string | null
   playing: boolean
 }) {
+  // Single click previews (no effect on live output); double click goes
+  // live immediately, preserving the previous single-click behavior
+  // (re-basing the auto-advance loop when it's running).
   const handleClick = (index: number) => {
+    useSlideStore.getState().previewPage(deck.id, index)
+  }
+
+  const handleDoubleClick = (index: number) => {
     const store = useSlideStore.getState()
     if (store.playing) {
       store.startLoop(deck.id, index)
@@ -48,16 +56,20 @@ function DeckThumbnails({
       {deck.pages.map((page, index) => {
         const isSelected = activeDeckId === deck.id && activePageIndex === index
         const isLive = isSelected && !!liveDataUrl && liveDataUrl === page
+        const isPreviewed = previewDeckId === deck.id && previewPageIndex === index
         return (
           <button
             key={index}
             type="button"
             onClick={() => handleClick(index)}
+            onDoubleClick={() => handleDoubleClick(index)}
             className={cn(
               "group relative aspect-video overflow-hidden rounded-md border bg-black/40 transition-colors",
-              isSelected
+              isLive
                 ? "border-primary ring-2 ring-primary/50"
-                : "border-border hover:border-primary/40"
+                : isPreviewed
+                  ? "border-primary/50 ring-1 ring-primary/30"
+                  : "border-border hover:border-primary/40"
             )}
           >
             <img
@@ -91,12 +103,16 @@ function DeckRow({
   deck,
   activeDeckId,
   activePageIndex,
+  previewDeckId,
+  previewPageIndex,
   playing,
   liveDataUrl,
 }: {
   deck: SlideDeck
   activeDeckId: string | null
   activePageIndex: number
+  previewDeckId: string | null
+  previewPageIndex: number
   playing: boolean
   liveDataUrl: string | null
 }) {
@@ -151,6 +167,8 @@ function DeckRow({
         deck={deck}
         activeDeckId={activeDeckId}
         activePageIndex={activePageIndex}
+        previewDeckId={previewDeckId}
+        previewPageIndex={previewPageIndex}
         liveDataUrl={liveDataUrl}
         playing={playing}
       />
@@ -162,25 +180,31 @@ export function DeckPanel() {
   const decks = useSlideStore((s) => s.decks)
   const activeDeckId = useSlideStore((s) => s.activeDeckId)
   const activePageIndex = useSlideStore((s) => s.activePageIndex)
+  const previewDeckId = useSlideStore((s) => s.previewDeckId)
+  const previewPageIndex = useSlideStore((s) => s.previewPageIndex)
   const playing = useSlideStore((s) => s.playing)
+  const importing = useSlideStore((s) => s.importing)
+  const importProgress = useSlideStore((s) => s.importProgress)
   const onAir = usePresentationOnAir((s) => s.onAir)
-  const [importing, setImporting] = React.useState(false)
 
   const liveDataUrl = onAir?.kind === "slide" ? onAir.dataUrl : null
 
-  const handleImport = async () => {
-    setImporting(true)
-    try {
-      const result = await importPdfDeck()
-      if (!result) return
-      const deck = useSlideStore.getState().addDeck(result)
-      toast.success(`Imported "${deck.name}" (${deck.pages.length} slides)`)
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to import PDF")
-    } finally {
-      setImporting(false)
-    }
+  // The import itself lives in the store (importDeck) so it keeps running
+  // and reporting progress even if this panel unmounts mid-import — the
+  // panel here just renders whatever the store is currently doing.
+  const handleImport = () => {
+    void useSlideStore.getState().importDeck()
   }
+
+  const importLabel = importing
+    ? importProgress
+      ? `Rendering ${importProgress.done}/${importProgress.total}…`
+      : "Importing…"
+    : "Import PDF"
+
+  const importPct = importProgress
+    ? Math.round((importProgress.done / importProgress.total) * 100)
+    : 0
 
   const handlePlayPause = () => {
     if (!activeDeckId) return
@@ -222,13 +246,25 @@ export function DeckPanel() {
             variant="outline"
             size="xs"
             disabled={importing}
-            onClick={() => void handleImport()}
+            onClick={handleImport}
           >
             {importing ? <Loader2Icon className="animate-spin" /> : <FileUpIcon />}
-            Import PDF
+            {importLabel}
           </Button>
         </div>
       </PanelHeader>
+
+      {importing && (
+        <div className="h-0.5 w-full bg-border">
+          <div
+            className={cn(
+              "h-full bg-primary transition-[width]",
+              !importProgress && "w-1/12 animate-pulse"
+            )}
+            style={importProgress ? { width: `${importPct}%` } : undefined}
+          />
+        </div>
+      )}
 
       <ScrollArea className="min-h-0 flex-1">
         {decks.length === 0 ? (
@@ -245,6 +281,8 @@ export function DeckPanel() {
                 deck={deck}
                 activeDeckId={activeDeckId}
                 activePageIndex={activePageIndex}
+                previewDeckId={previewDeckId}
+                previewPageIndex={previewPageIndex}
                 playing={playing}
                 liveDataUrl={liveDataUrl}
               />
