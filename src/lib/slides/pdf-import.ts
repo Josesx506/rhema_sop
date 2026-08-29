@@ -16,13 +16,15 @@
  *   deadlocks WKWebView. Same reason for isOffscreenCanvasSupported: false,
  *   useWasm: false (wasm image decoding wedged the worker on the first
  *   image-heavy page), and useWorkerFetch: false.
- * - Renders have repeatedly been seen to stall on the SECOND render call
- *   of a shared document/worker. Every page render carries a watchdog, and
- *   a timeout in the fast path triggers an automatic fallback that opens a
- *   FRESH document (fresh worker) per page — slower, but immune to a
- *   wedged worker.
- * - getDocument({data}) TRANSFERS the buffer to the worker (detaching it),
- *   so every getDocument call gets its own copy of the bytes.
+ * - NO WEB WORKER AT ALL: WKWebView's worker message channel proved broken
+ *   for pdf.js font/glyph traffic — the first text-heavy page either
+ *   wedged the render or "succeeded" instantly with every glyph silently
+ *   dropped. Importing the worker module into the main thread makes pdf.js
+ *   run in-process (globalThis.pdfjsWorker), removing the channel entirely.
+ *   Watchdogs and the fresh-document-per-page retry are kept as generic
+ *   safety nets.
+ * - getDocument({data}) can transfer/detach the buffer, so every
+ *   getDocument call gets its own copy of the bytes.
  *
  * Progress is instrumented via console.warn so it lands in the exported
  * diagnostic log (console-to-log forwards warn/error only).
@@ -30,7 +32,6 @@
 
 import { open } from "@tauri-apps/plugin-dialog"
 import { readFile } from "@tauri-apps/plugin-fs"
-import pdfWorkerUrl from "pdfjs-dist/legacy/build/pdf.worker.min.mjs?url"
 
 /** Longest side of a rendered page image, in pixels. */
 const MAX_SIDE = 1920
@@ -249,12 +250,19 @@ export async function importPdfDeck(
 
   try {
     const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs")
-    pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl
+    // NO Worker at all: importing the worker module into the MAIN thread
+    // makes pdf.js run everything in-process (it checks
+    // globalThis.pdfjsWorker before ever constructing a Worker). WKWebView's
+    // worker message channel proved broken for font/glyph traffic — the
+    // first text-heavy page either wedged the render (fast-path hangs) or
+    // "rendered" instantly with every glyph silently dropped. With no
+    // channel there is nothing to wedge and nothing to drop.
+    await import("pdfjs-dist/legacy/build/pdf.worker.mjs")
     // Pipeline version marker: proves in exported logs WHICH import code a
     // session ran (session decks imported by older code look broken even
     // after an update until the app restarts and the deck is reimported).
     log(
-      `pipeline v4 (glyph paths, white-bg, font-pack) — pdfjs ${pdfjsLib.version ?? "?"}, worker: ${pdfWorkerUrl}`
+      `pipeline v5 (main-thread, glyph paths, white-bg, font-pack) — pdfjs ${pdfjsLib.version ?? "?"}, fake worker: ${Boolean((globalThis as Record<string, unknown>).pdfjsWorker)}`
     )
 
     try {
