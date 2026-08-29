@@ -491,6 +491,35 @@ function drawBackground(
   }
 }
 
+/** Fork: small caption (e.g. song title) bottom-left of the frame, kept
+ * clear of the logo overlay's default bottom-right anchor and truncated
+ * with an ellipsis when it exceeds 45% of the frame width. */
+function drawFooterLabel(
+  ctx: CanvasRenderingContext2D,
+  theme: BroadcastTheme,
+  label: string,
+  frame: VerseLayoutRect,
+  scale: number
+): void {
+  const padding = 40 * scale
+  const fontSize = 26 * scale
+  const maxWidth = frame.width * 0.45
+  ctx.save()
+  ctx.font = `500 ${fontSize}px "${theme.reference.fontFamily}", sans-serif`
+  ctx.fillStyle = "rgba(255, 255, 255, 0.75)"
+  ctx.textAlign = "left"
+  ctx.textBaseline = "bottom"
+  let text = label
+  if (ctx.measureText(text).width > maxWidth) {
+    while (text.length > 1 && ctx.measureText(`${text}…`).width > maxWidth) {
+      text = text.slice(0, -1)
+    }
+    text = `${text.trimEnd()}…`
+  }
+  ctx.fillText(text, frame.x + padding, frame.y + frame.height - padding)
+  ctx.restore()
+}
+
 function drawLogoOverlay(
   ctx: CanvasRenderingContext2D,
   theme: BroadcastTheme,
@@ -1538,6 +1567,16 @@ function renderVerseImpl(
       referenceArea.x,
       referenceArea.width,
       referenceRect.y
+    )
+  }
+
+  if (verse.footerLabel) {
+    drawFooterLabel(
+      ctx,
+      scaledTheme,
+      verse.footerLabel,
+      metrics.backgroundRect,
+      options?.scale ?? 1
     )
   }
 

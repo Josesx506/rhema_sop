@@ -14,6 +14,10 @@ export interface VerseRenderData {
    * output syncs) no longer keep a stale verse alive. Absent = always
    * re-arm (pre-fork behavior). */
   presentedAt?: number
+  /** Fork: small caption drawn bottom-left of the frame (song title while
+   * lyrics are shown). Truncated with an ellipsis by the renderer; kept
+   * clear of the logo overlay's default bottom-right anchor. */
+  footerLabel?: string
 }
 
 export interface RenderOptions {

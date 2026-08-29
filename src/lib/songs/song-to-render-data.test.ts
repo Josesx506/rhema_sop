@@ -15,9 +15,10 @@ function makeBlock(overrides: Partial<SongBlock> = {}): SongBlock {
 }
 
 describe("blockToRenderData", () => {
-  it("formats the reference as '<title> — <label>'", () => {
+  it("shows lyrics only: empty reference, song title as the footer caption", () => {
     const data = blockToRenderData("Amazing Grace", makeBlock({ label: "Chorus (x2)" }))
-    expect(data.reference).toBe("Amazing Grace — Chorus (x2)")
+    expect(data.reference).toBe("")
+    expect(data.footerLabel).toBe("Amazing Grace")
   })
 
   it("maps each lyric line to a segment with just text", () => {
