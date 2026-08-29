@@ -5,6 +5,11 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow"
 import { onThemeFontsLoaded, renderVerse } from "@/lib/verse-renderer"
 import { preloadThemeImages, themeImageCache } from "@/lib/theme-image-cache"
 import { normalizeTheme } from "@/lib/theme-migrations"
+import { PresentationController } from "@/lib/presentation-output"
+import {
+  PRESENTATION_UPDATE_EVENT,
+  type PresentationPayload,
+} from "@/types/presentation"
 import "./broadcast-fonts.css"
 import type { BroadcastTheme, VerseRenderData } from "@/types/broadcast"
 import type { NdiConfigEventPayload, NdiFrameRequest } from "@/types"
@@ -56,6 +61,7 @@ function BroadcastCanvas() {
   const lastFrameTimeRef = useRef<number | null>(null)
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pushNdiBurstRef = useRef<(() => void) | null>(null)
+  const presentationRef = useRef<PresentationController | null>(null)
 
   const logDebug = useCallback((message: string, meta?: unknown) => {
     if (!import.meta.env.DEV) return
@@ -71,6 +77,13 @@ function BroadcastCanvas() {
     if (!canvas) return
     const ctx = canvas.getContext("2d")
     if (!ctx) return
+
+    // Presentation content (slides / media loops) owns the whole frame and
+    // ignores the verse scene and idle fade while active.
+    if (presentationRef.current?.active) {
+      presentationRef.current.drawFrame(ctx, canvas.width, canvas.height)
+      return
+    }
 
     const data = latestData.current
     if (!data) {
@@ -153,6 +166,9 @@ function BroadcastCanvas() {
   const armIdleTimer = useCallback(
     (idleFadeMs: number) => {
       clearIdleTimer()
+      // <= 0 means "no auto fade" — song blocks disable it (a chorus stays
+      // up while the congregation sings; see VerseRenderData.noAutoFade).
+      if (idleFadeMs <= 0) return
       idleTimerRef.current = setTimeout(() => {
         idleTimerRef.current = null
         logDebug("Idle timeout reached; fading display to black")
@@ -272,6 +288,17 @@ function BroadcastCanvas() {
       pushNdiBurst()
     })
 
+    // Presentation content (slides / media loops) — see presentation-output.ts.
+    const presentation = new PresentationController({
+      redraw: () => draw(),
+      ndiBurst: () => pushNdiBurstRef.current?.(),
+    })
+    presentationRef.current = presentation
+    const unlistenPresentation = currentWindow.listen<PresentationPayload>(
+      PRESENTATION_UPDATE_EVENT,
+      (event) => presentation.handlePayload(event.payload)
+    )
+
     const unlistenNdiConfig = currentWindow.listen<NdiConfigEventPayload>("broadcast:ndi-config", (event) => {
       ndiConfigRef.current = event.payload
       logDebug("Received broadcast:ndi-config", event.payload)
@@ -314,6 +341,9 @@ function BroadcastCanvas() {
       unsubscribeFonts()
       unlisten.then((fn) => fn())
       unlistenNdiConfig.then((fn) => fn())
+      unlistenPresentation.then((fn) => fn())
+      presentation.dispose()
+      presentationRef.current = null
       clearIdleTimer()
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current)
     }

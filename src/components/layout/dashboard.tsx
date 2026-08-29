@@ -6,8 +6,13 @@ import { QueuePanel } from "@/components/panels/queue-panel"
 import { SearchPanel } from "@/components/panels/search-panel"
 import { DetectionsPanel } from "@/components/panels/detections-panel"
 import { EmbeddingWarningBanner } from "@/components/ui/embedding-warning-banner"
+import { ModeTabs } from "@/components/layout/mode-tabs"
+import { SongsMode } from "@/components/layout/songs-mode"
+import { PresentationMode } from "@/components/layout/presentation-mode"
+import { useAppModeStore } from "@/stores/app-mode-store"
 
 export function Dashboard() {
+  const mode = useAppModeStore((s) => s.mode)
   return (
     <div
       style={{
@@ -15,8 +20,9 @@ export function Dashboard() {
         inset: "0px",
         display: "grid",
         // The `auto` row hosts the warning banner and collapses to 0 when
-        // there is nothing to warn about.
-        gridTemplateRows: "56px auto minmax(0, 2fr) minmax(0, 3fr)",
+        // there is nothing to warn about. The 32px row is the fork's mode
+        // tab bar (Scripture | Songs | Presentation).
+        gridTemplateRows: "56px auto 32px minmax(0, 2fr) minmax(0, 3fr)",
         overflow: "hidden",
       }}
       className="bg-background"
@@ -29,30 +35,41 @@ export function Dashboard() {
       {/* Row 2: warning banner (collapses when healthy) */}
       <EmbeddingWarningBanner />
 
-      {/* Row 2: 4 panels */}
-      <div
-        className="col-span-4 min-h-0 *:min-h-0"
-        style={{
-          padding: "12px",
-          display: "grid",
-          gap: "12px",
-          minHeight: 0,
-          overflow: "hidden",
-          gridTemplateColumns: "320px minmax(0, 1fr) minmax(0, 1fr) 320px",
-          gridTemplateRows: "minmax(0, 1fr)",
-        }}
-      >
-        <TranscriptPanel />
-        <PreviewPanel />
-        <LiveOutputPanel />
-        <QueuePanel />
+      {/* Row 3: mode tabs (fork) */}
+      <div className="col-span-4 flex items-center">
+        <ModeTabs />
       </div>
-      {/* Row 3: Search + Detections, split 50/50 so the two-column
-          detections panel has room to breathe */}
-      <div className="col-span-4 grid min-h-0 grid-cols-2 gap-3 px-3 pb-3">
-        <SearchPanel />
-        <DetectionsPanel />
-      </div>
+
+      {mode === "songs" && <SongsMode />}
+      {mode === "presentation" && <PresentationMode />}
+      {mode === "scripture" && (
+        <>
+          {/* Row 2: 4 panels */}
+          <div
+            className="col-span-4 min-h-0 *:min-h-0"
+            style={{
+              padding: "12px",
+              display: "grid",
+              gap: "12px",
+              minHeight: 0,
+              overflow: "hidden",
+              gridTemplateColumns: "320px minmax(0, 1fr) minmax(0, 1fr) 320px",
+              gridTemplateRows: "minmax(0, 1fr)",
+            }}
+          >
+            <TranscriptPanel />
+            <PreviewPanel />
+            <LiveOutputPanel />
+            <QueuePanel />
+          </div>
+          {/* Row 3: Search + Detections, split 50/50 so the two-column
+              detections panel has room to breathe */}
+          <div className="col-span-4 grid min-h-0 grid-cols-2 gap-3 px-3 pb-3">
+            <SearchPanel />
+            <DetectionsPanel />
+          </div>
+        </>
+      )}
     </div>
     // <div
     //   style={{

@@ -111,7 +111,7 @@ function setNestedValue(obj: Record<string, unknown>, path: string, value: unkno
 function emitDraftToBroadcast(state: BroadcastState): void {
   if (!state.draftTheme) return
   const verse = state.isLive ? state.liveVerse : null
-  const idleFadeMs = useSettingsStore.getState().idleFadeMs
+  const idleFadeMs = verse?.noAutoFade ? 0 : useSettingsStore.getState().idleFadeMs
   for (const output of state.outputs) {
     if (output.themeId !== state.editingThemeId) continue
     void emitTo(outputWindowLabel(output.id), "broadcast:verse-update", {
@@ -251,7 +251,10 @@ export const useBroadcastStore = create<BroadcastState>((set, get) => ({
     void emitTo(outputWindowLabel(outputId), "broadcast:verse-update", {
       theme,
       verse: s.isLive ? s.liveVerse : null,
-      idleFadeMs: useSettingsStore.getState().idleFadeMs,
+      idleFadeMs:
+        s.isLive && s.liveVerse?.noAutoFade
+          ? 0
+          : useSettingsStore.getState().idleFadeMs,
     }).catch(() => {})
   },
   syncBroadcastOutput: () => {

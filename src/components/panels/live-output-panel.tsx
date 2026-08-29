@@ -40,7 +40,7 @@ export function LiveOutputPanel() {
       idleTimerRef.current = null
     }
     setFaded(false)
-    if (verseData) {
+    if (verseData && !verseData.noAutoFade) {
       idleTimerRef.current = setTimeout(() => setFaded(true), idleFadeMs)
     }
     return () => {

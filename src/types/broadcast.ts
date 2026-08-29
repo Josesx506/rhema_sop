@@ -6,6 +6,9 @@ export interface VerseSegment {
 export interface VerseRenderData {
   reference: string
   segments: VerseSegment[]
+  /** Fork: suppress the idle fade for this content (song lyric blocks stay
+   * up while the congregation sings). Absent/false = normal fade. */
+  noAutoFade?: boolean
 }
 
 export interface RenderOptions {
