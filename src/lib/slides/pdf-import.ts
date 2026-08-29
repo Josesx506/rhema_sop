@@ -47,9 +47,12 @@ export async function importPdfDeck(): Promise<ImportedDeck | null> {
   }
 
   try {
-    const pdfjsLib = await import("pdfjs-dist")
+    // The legacy build, deliberately: the modern build uses ES2025 iterator
+    // helpers (the `Iterator` global), which WKWebView's engine on macOS 14
+    // doesn't have — imports fail with "Can't find variable: Iterator".
+    const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs")
     pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-      "pdfjs-dist/build/pdf.worker.min.mjs",
+      "pdfjs-dist/legacy/build/pdf.worker.min.mjs",
       import.meta.url
     ).toString()
 
