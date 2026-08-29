@@ -151,6 +151,13 @@ ever installed on the PC. Tauri cross-compile from macOS was ruled out
 
 ## Done
 
+- 2026-08-29: v0.4.0 tagged and built — first fork feature release (songs,
+  slides, media loops, preview-before-live, relevance idle fade). CI green
+  on all three platforms; Windows installer (Rhema-windows-x64-setup.exe)
+  on the fork's v0.4.0 draft release. Upstream PR branches pushed:
+  feat/idle-fade-timeout, feat/live-output-guards. Pages deploy gated to
+  the canonical repo.
+
 - 2026-08-29: Songs, slides, and media-loop modules IMPLEMENTED on branch
   `feature/presentation-modules` (commits e0ed1dd foundation, 4b9e2bf
   media, 32eded9 slides, 7366e11 songs) via orchestrated parallel agents.
