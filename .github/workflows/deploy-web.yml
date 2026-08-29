@@ -22,6 +22,10 @@ concurrency:
 
 jobs:
   build:
+    # Fork note: the website deploy only makes sense on the canonical repo
+    # (forks have no Pages configured, so the run just fails red on every
+    # push to main).
+    if: github.repository == 'openbezal/rhema'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -54,7 +58,7 @@ jobs:
           path: web/out
 
   deploy:
-    if: github.event_name != 'pull_request'
+    if: github.repository == 'openbezal/rhema' && github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
     permissions:
