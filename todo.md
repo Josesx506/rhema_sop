@@ -151,6 +151,14 @@ ever installed on the PC. Tauri cross-compile from macOS was ruled out
 
 ## Done
 
+- 2026-08-29: Songs, slides, and media-loop modules IMPLEMENTED on branch
+  `feature/presentation-modules` (commits e0ed1dd foundation, 4b9e2bf
+  media, 32eded9 slides, 7366e11 songs) via orchestrated parallel agents.
+  All designs above realized; mode tabs (Scripture | Songs | Presentation)
+  in the dashboard; 297 tests + typecheck + production build + cargo check
+  green. Intrusion audit: upstream-owned files touched only at the planned
+  mount points. Awaiting user's manual run-through before merge to main.
+
 - 2026-08-29: Merged upstream/main (v0.3.2, 58 commits) keeping fork features
   (idle fade-out, logo/watermark overlay, SOP theme, auto_queued gate,
   optimum pip fix). Typecheck + 221 tests + build verified.
