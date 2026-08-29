@@ -58,6 +58,7 @@ const CLASSIC_DARK: BroadcastTheme = {
     opacity: 0,
     borderRadius: 0,
     padding: 0,
+    image: null,
   },
   verseText: {
     fontFamily: "Source Serif 4 Variable",
@@ -128,6 +129,7 @@ const MODERN_LIGHT: BroadcastTheme = {
     opacity: 0,
     borderRadius: 0,
     padding: 0,
+    image: null,
   },
   verseText: {
     fontFamily: "Geist Variable",
@@ -182,29 +184,37 @@ const MODERN_LIGHT: BroadcastTheme = {
   },
 }
 
-const BROADCAST_OVERLAY: BroadcastTheme = {
+// Lower third: transparent background for NDI keying, a text band across the
+// bottom, reference top-left with the verse text underneath it.
+const LOWER_THIRDS: BroadcastTheme = {
   ...baseTheme,
+  // Id keeps its original spelling on purpose — it is persisted in every
+  // output's themeId and in user themes derived from it, so renaming it would
+  // orphan existing selections. Only the display name changed.
   id: "builtin-broadcast-overlay",
-  name: "Broadcast Overlay",
+  name: "Lower Thirds",
   background: {
     type: "transparent",
     color: "transparent",
     gradient: null,
     image: null,
   },
+  // The container: the band the reference and verse both live in. Swap its
+  // colour for an image in the designer to use band artwork.
   textBox: {
     enabled: true,
     color: "#000000",
     opacity: 0.7,
     borderRadius: 12,
     padding: 24,
+    image: null,
   },
   verseText: {
     fontFamily: "Geist Variable",
     fontSize: 64,
     fontWeight: 500,
     color: "#ffffff",
-    horizontalAlign: "center",
+    horizontalAlign: "left",
     verticalAlign: "top",
     textTransform: "none",
     textDecoration: "none",
@@ -221,32 +231,110 @@ const BROADCAST_OVERLAY: BroadcastTheme = {
   },
   reference: {
     fontFamily: "Geist Variable",
-    fontSize: 43,
+    fontSize: 36,
     fontWeight: 600,
     color: "#fbbf24",
-    horizontalAlign: "center",
+    horizontalAlign: "left",
     verticalAlign: "top",
     textTransform: "none",
     textDecoration: "none",
     uppercase: false,
     letterSpacing: 1,
-    position: "below",
+    position: "above",
   },
   layout: {
     anchor: "bottom-center",
     offsetX: 0,
     offsetY: 0,
     padding: { top: 40, right: 60, bottom: 40, left: 60 },
-    textAlign: "center",
+    textAlign: "left",
     backgroundWidth: 100,
     backgroundHeight: 100,
-    textAreaWidth: 90,
-    textAreaHeight: 40,
+    // Full-bleed: a lower third spans the frame, so no side margins.
+    textAreaWidth: 100,
+    // Bottom-anchored, so shrinking this lowers the band's top edge and
+    // leaves it sitting on the bottom of the frame.
+    textAreaHeight: 32,
     referenceGap: 24,
   },
   transition: {
     type: "fade",
     duration: 300,
+    easing: "ease-in-out",
+    direction: "up",
+  },
+}
+
+// Free-positioning example: reference in a top-left banner, verse block
+// detached below it (the layout requested in issue #100).
+const BANNER_SPLIT: BroadcastTheme = {
+  ...baseTheme,
+  id: "builtin-banner-split",
+  name: "Banner Split",
+  background: {
+    type: "solid",
+    color: "#312e81",
+    gradient: null,
+    image: null,
+  },
+  textBox: {
+    enabled: false,
+    color: "#000000",
+    opacity: 0,
+    borderRadius: 0,
+    padding: 0,
+    image: null,
+  },
+  verseText: {
+    fontFamily: "Geist Variable",
+    fontSize: 72,
+    fontWeight: 600,
+    color: "#ffffff",
+    horizontalAlign: "left",
+    verticalAlign: "top",
+    textTransform: "none",
+    textDecoration: "none",
+    lineHeight: 1.4,
+    letterSpacing: 0,
+    shadow: null,
+    outline: null,
+  },
+  verseNumbers: {
+    visible: true,
+    fontSize: 32,
+    color: "#fde047",
+    superscript: true,
+  },
+  reference: {
+    fontFamily: "Geist Variable",
+    fontSize: 40,
+    fontWeight: 600,
+    color: "#ffffff",
+    horizontalAlign: "left",
+    verticalAlign: "middle",
+    textTransform: "none",
+    textDecoration: "none",
+    uppercase: true,
+    letterSpacing: 1,
+    position: "above",
+  },
+  layout: {
+    anchor: "center",
+    offsetX: 0,
+    offsetY: 0,
+    padding: { top: 0, right: 0, bottom: 0, left: 0 },
+    textAlign: "left",
+    backgroundWidth: 100,
+    backgroundHeight: 100,
+    textAreaWidth: 90,
+    textAreaHeight: 80,
+    mode: "free",
+    referenceBox: { x: 5, y: 4, width: 55, height: 9 },
+    verseBox: { x: 5, y: 22, width: 62, height: 55 },
+  },
+  transition: {
+    type: "fade",
+    duration: 400,
     easing: "ease-in-out",
     direction: "up",
   },
@@ -275,6 +363,7 @@ const SOP: BroadcastTheme = {
     opacity: 0,
     borderRadius: 0,
     padding: 0,
+    image: null,
   },
   verseText: {
     fontFamily: "Source Serif 4 Variable",
@@ -347,6 +436,9 @@ const SOP: BroadcastTheme = {
 export const BUILTIN_THEMES: BroadcastTheme[] = [
   CLASSIC_DARK,
   MODERN_LIGHT,
-  BROADCAST_OVERLAY,
+  LOWER_THIRDS,
+  BANNER_SPLIT,
   SOP,
 ]
+
+export { CLASSIC_DARK, LOWER_THIRDS }

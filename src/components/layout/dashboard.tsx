@@ -5,6 +5,7 @@ import { LiveOutputPanel } from "@/components/panels/live-output-panel"
 import { QueuePanel } from "@/components/panels/queue-panel"
 import { SearchPanel } from "@/components/panels/search-panel"
 import { DetectionsPanel } from "@/components/panels/detections-panel"
+import { EmbeddingWarningBanner } from "@/components/ui/embedding-warning-banner"
 
 export function Dashboard() {
   return (
@@ -13,7 +14,9 @@ export function Dashboard() {
         position: "fixed",
         inset: "0px",
         display: "grid",
-        gridTemplateRows: "56px minmax(0, 2fr) minmax(0, 3fr)",
+        // The `auto` row hosts the warning banner and collapses to 0 when
+        // there is nothing to warn about.
+        gridTemplateRows: "56px auto minmax(0, 2fr) minmax(0, 3fr)",
         overflow: "hidden",
       }}
       className="bg-background"
@@ -22,6 +25,9 @@ export function Dashboard() {
       <div className="col-span-4">
         <TransportBar />
       </div>
+
+      {/* Row 2: warning banner (collapses when healthy) */}
+      <EmbeddingWarningBanner />
 
       {/* Row 2: 4 panels */}
       <div
@@ -41,8 +47,9 @@ export function Dashboard() {
         <LiveOutputPanel />
         <QueuePanel />
       </div>
-      {/* Row 3: Search + Detections (own grid, independent of top row columns) */}
-      <div className="col-span-4 grid min-h-0 grid-cols-[2fr_1fr] gap-3 px-3 pb-3">
+      {/* Row 3: Search + Detections, split 50/50 so the two-column
+          detections panel has room to breathe */}
+      <div className="col-span-4 grid min-h-0 grid-cols-2 gap-3 px-3 pb-3">
         <SearchPanel />
         <DetectionsPanel />
       </div>

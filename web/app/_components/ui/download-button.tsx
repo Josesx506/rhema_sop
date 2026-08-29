@@ -8,15 +8,18 @@ import {
 } from "@tabler/icons-react";
 import { Button } from "./button";
 import { usePlatform } from "../../_lib/use-platform";
-import { SITE } from "../../_lib/site";
+import { downloadHref } from "../../_lib/site";
 
 const COPY: Record<
   "mac" | "windows" | "linux" | "other" | "default",
   { label: string; icon: TablerIcon }
 > = {
+  // Each desktop platform links straight to its installer. "other" covers
+  // phones, tablets, and anything unrecognised, which land on the release page
+  // rather than being handed a file they cannot open.
   mac: { label: "Download for macOS", icon: IconBrandApple },
   windows: { label: "Download for Windows", icon: IconBrandWindows },
-  linux: { label: "Download", icon: IconDownload },
+  linux: { label: "Download for Linux", icon: IconDownload },
   other: { label: "Download", icon: IconDownload },
   default: { label: "Download", icon: IconDownload },
 };
@@ -34,7 +37,7 @@ export function DownloadButton({
 
   return (
     <Button
-      href={SITE.repo.releasesLatest}
+      href={downloadHref(platform)}
       variant="primary"
       size={size}
       className={className}

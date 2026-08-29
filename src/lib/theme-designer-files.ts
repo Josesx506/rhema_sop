@@ -1,7 +1,7 @@
 import { open, save } from "@tauri-apps/plugin-dialog"
 import { readFile, writeTextFile } from "@tauri-apps/plugin-fs"
 import type { BroadcastTheme } from "@/types"
-import { DEFAULT_LOGO_OVERLAY } from "./builtin-themes"
+import { normalizeTheme } from "@/lib/theme-migrations"
 
 /**
  * Opens a native file dialog to pick an image, reads it,
@@ -75,13 +75,11 @@ export async function importTheme(): Promise<BroadcastTheme | null> {
     throw new Error("Invalid theme file: missing required fields")
   }
 
-  return {
+  return normalizeTheme({
     ...parsed,
     id: crypto.randomUUID(),
     builtin: false,
     createdAt: Date.now(),
     updatedAt: Date.now(),
-    // Back-fill for theme files exported before logoOverlay existed.
-    logoOverlay: parsed.logoOverlay ?? DEFAULT_LOGO_OVERLAY,
-  }
+  })
 }

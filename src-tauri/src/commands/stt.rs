@@ -12,11 +12,15 @@ use crate::events::{
 };
 use crate::state::AppState;
 
-/// [DIAG] Running totals for AppState mutex contention on the direct-detection
-/// hot path. Direct-mode detection runs on every Final transcript fragment
-/// inside spawn_blocking, so high contention here means workers are stalling.
-static DIRECT_LOCK_OK: AtomicU64 = AtomicU64::new(0);
-static DIRECT_LOCK_CONTENDED: AtomicU64 = AtomicU64::new(0);
+/// Epoch milliseconds — the shared clock for `[LAT]` latency marks. The
+/// frontend logs `Date.now()` through the `ui_mark` command, so backend and
+/// webview timestamps interleave comparably in one log.
+pub(crate) fn epoch_ms() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or_default()
+}
 
 /// Truncate a string to at most `max_bytes`, snapping to a valid UTF-8 char boundary.
 fn truncate_safe(s: &str, max_bytes: usize) -> &str {
@@ -51,13 +55,25 @@ pub async fn start_transcription(
     provider: Option<String>,
 ) -> Result<(), String> {
     // ── 1. Guard: already running? ──────────────────────────────────────
-    let (stt_active, audio_active) = {
+    let (stt_active, audio_active, audio_test_active) = {
         let app_state = state.lock().map_err(|e| e.to_string())?;
         if app_state.stt_active.load(Ordering::Relaxed) {
             return Err("Transcription is already running".into());
         }
-        (app_state.stt_active.clone(), app_state.audio_active.clone())
+        (
+            app_state.stt_active.clone(),
+            app_state.audio_active.clone(),
+            app_state.audio_test_active.clone(),
+        )
     };
+
+    // Transcription preempts a running audio test — both would open the same
+    // capture device. Clearing the flag makes the test thread exit within
+    // ~100 ms; the short sleep lets its cpal stream drop first.
+    if audio_test_active.swap(false, Ordering::SeqCst) {
+        log::info!("Preempting running audio test for transcription");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
 
     let provider_name = provider.as_deref().unwrap_or("deepgram");
 
@@ -131,9 +147,11 @@ pub async fn start_transcription(
                 );
             }
 
+            // Never log key material: this file is exported by users for
+            // support, and a prefix is still a prefix of a secret.
             log::info!(
-                "Starting Deepgram transcription: api_key={}..., device_id={device_id:?}, gain={gain:?}",
-                truncate_safe(&resolved_api_key, 8)
+                "Starting Deepgram transcription: api_key={}, device_id={device_id:?}, gain={gain:?}",
+                if resolved_api_key.is_empty() { "missing" } else { "set" }
             );
 
             let stt_config = SttConfig {
@@ -317,44 +335,66 @@ pub async fn start_transcription(
     let evt_active = stt_active.clone();
     let event_app = app.clone();
 
-    // Background semantic detection channel — non-blocking, drops if busy
-    let (semantic_tx, mut semantic_rx) = tokio::sync::mpsc::channel::<String>(4);
-
-    // Background detection channel — direct + reading mode, non-blocking
-    let (detect_tx, mut detect_rx) = tokio::sync::mpsc::channel::<String>(16);
+    // Background detection channel — direct + reading mode + FTS, non-blocking.
+    // Carries (transcript, is_final): partials get instant direct-reference
+    // detection; finals get the full pipeline.
+    let (detect_tx, mut detect_rx) = tokio::sync::mpsc::channel::<(String, bool)>(16);
 
     // [DIAG] Counters so we can see whether transcripts are being dropped
-    // because the detection workers can't keep up. Logged every 25 sends
+    // because the detection worker can't keep up. Logged every 25 sends
     // alongside current queue depth.
     let detect_sent = Arc::new(AtomicU64::new(0));
     let detect_dropped = Arc::new(AtomicU64::new(0));
-    let semantic_sent = Arc::new(AtomicU64::new(0));
-    let semantic_dropped = Arc::new(AtomicU64::new(0));
 
-    // Spawn semantic detection worker (runs ONNX inference without blocking transcript).
-    // Uses spawn_blocking so ONNX doesn't starve the tokio async runtime
-    // (WebSocket readers, event emitters, etc.).
-    let sem_app = app.clone();
-    tauri::async_runtime::spawn(async move {
-        while let Some(text) = semantic_rx.recv().await {
-            let app_clone = sem_app.clone();
-            let _ = tokio::task::spawn_blocking(move || {
-                run_semantic_detection(&app_clone, &text);
-            })
-            .await;
-        }
-    });
-
-    // Spawn detection worker (runs direct detection + reading mode without blocking
-    // transcript delivery). Uses spawn_blocking so mutex locks and DB I/O don't
-    // starve the tokio runtime.
+    // Spawn ONE detection worker that runs direct detection first, then the
+    // FTS5 pass — sequentially. They used to run concurrently on the same
+    // utterance and contended for the single SQLite connection mutex, which
+    // pushed direct detection from ~1-2ms to ~18ms. Sequential also lets us
+    // skip the FTS pass entirely when the utterance IS a spoken reference:
+    // text-searching "Revelation chapter 3 verse 4" only yields junk hits
+    // that pollute (and now replace) the semantic detections column.
+    //
+    // PARTIALS run direct detection only. Measured with the [LAT] timeline:
+    // the complete reference text was legible in a Deepgram partial 2.8-5.4s
+    // before the final arrived (endpointing holds the segment open while the
+    // speaker keeps talking), and the entire post-final pipeline is ~50ms —
+    // so finals-only detection made spoken references feel 3-5s slow. Direct
+    // detection is ~1-3ms, cheap enough for every changed partial. Reading
+    // mode and the FTS pass stay finals-only. Identical repeated partials
+    // (Deepgram re-emits the same text ~1/s while audio continues) are
+    // skipped.
+    //
+    // Uses spawn_blocking so mutex locks and DB I/O don't starve the tokio
+    // runtime (WebSocket readers, event emitters, etc.).
     let det_app = app.clone();
     tauri::async_runtime::spawn(async move {
-        while let Some(transcript) = detect_rx.recv().await {
+        let mut last_partial = String::new();
+        while let Some((transcript, is_final)) = detect_rx.recv().await {
+            if is_final {
+                last_partial.clear();
+            } else {
+                if transcript == last_partial {
+                    continue;
+                }
+                last_partial = transcript.clone();
+            }
             let app_clone = det_app.clone();
             let _ = tokio::task::spawn_blocking(move || {
+                log::info!(
+                    "[LAT] worker start t={} final={is_final} {:?}",
+                    epoch_ms(),
+                    truncate_safe(&transcript, 40)
+                );
                 let direct_found = run_direct_detection(&app_clone, &transcript);
+                if !is_final {
+                    return;
+                }
                 check_reading_mode(&app_clone, &transcript, direct_found);
+                if direct_found {
+                    log::info!("[DET-SEMANTIC] Skipped — utterance is a spoken reference");
+                } else {
+                    run_semantic_detection(&app_clone, &transcript);
+                }
             })
             .await;
         }
@@ -362,8 +402,6 @@ pub async fn start_transcription(
 
     let detect_sent_evt = detect_sent.clone();
     let detect_dropped_evt = detect_dropped.clone();
-    let semantic_sent_evt = semantic_sent.clone();
-    let semantic_dropped_evt = semantic_dropped.clone();
 
     tauri::async_runtime::spawn(async move {
         while let Some(event) = event_rx.recv().await {
@@ -375,6 +413,7 @@ pub async fn start_transcription(
                 TranscriptEvent::Partial { transcript, .. } => {
                     if !transcript.is_empty() {
                         let t0 = std::time::Instant::now();
+                        log::info!("[LAT] partial t={} {:?}", epoch_ms(), truncate_safe(&transcript, 60));
                         let _ = event_app.emit(
                             EVENT_TRANSCRIPT_PARTIAL,
                             TranscriptPayload {
@@ -387,6 +426,12 @@ pub async fn start_transcription(
                         // Check for translation commands on partials too (cheap string matching)
                         // This makes translation switching feel instant without waiting for speech_final
                         check_translation_command(&event_app, &transcript);
+
+                        // Direct reference detection on partials too: the full
+                        // reference is legible seconds before Deepgram issues
+                        // the final. Dropped silently if the worker is busy —
+                        // the final always follows and re-runs detection.
+                        let _ = detect_tx.try_send((transcript.clone(), false));
                         log::debug!("[EVT] Partial processed in {:?}", t0.elapsed());
                     }
                 }
@@ -398,6 +443,7 @@ pub async fn start_transcription(
                 } => {
                     if !transcript.is_empty() {
                         let t0 = std::time::Instant::now();
+                        log::info!("[LAT] final t={} {:?}", epoch_ms(), truncate_safe(&transcript, 60));
                         // Emit as permanent transcript segment IMMEDIATELY
                         // (never blocked by detection work)
                         let _ = event_app.emit(
@@ -414,7 +460,7 @@ pub async fn start_transcription(
 
                         // Fire-and-forget: detection runs in background thread pool.
                         // Event consumer proceeds immediately to next transcript.
-                        match detect_tx.try_send(transcript.clone()) {
+                        match detect_tx.try_send((transcript.clone(), true)) {
                             Ok(()) => {
                                 let n = detect_sent_evt.fetch_add(1, Ordering::Relaxed) + 1;
                                 if n % 25 == 0 {
@@ -431,30 +477,6 @@ pub async fn start_transcription(
                                 let sent = detect_sent_evt.load(Ordering::Relaxed);
                                 log::warn!(
                                     "[QUEUE] detect_tx DROPPED (consumer behind) sent={sent} dropped={d}"
-                                );
-                            }
-                        }
-
-                        // Send every is_final fragment to FTS5 immediately.
-                        // No sentence buffer — FTS5 is fast enough (~20-50ms)
-                        // to run on every fragment without waiting for pauses.
-                        match semantic_tx.try_send(transcript.clone()) {
-                            Ok(()) => {
-                                let n = semantic_sent_evt.fetch_add(1, Ordering::Relaxed) + 1;
-                                if n % 25 == 0 {
-                                    let depth = semantic_tx.max_capacity() - semantic_tx.capacity();
-                                    let dropped = semantic_dropped_evt.load(Ordering::Relaxed);
-                                    log::info!(
-                                        "[QUEUE] semantic_tx sent={n} dropped={dropped} depth={depth}/{}",
-                                        semantic_tx.max_capacity()
-                                    );
-                                }
-                            }
-                            Err(_) => {
-                                let d = semantic_dropped_evt.fetch_add(1, Ordering::Relaxed) + 1;
-                                let sent = semantic_sent_evt.load(Ordering::Relaxed);
-                                log::warn!(
-                                    "[QUEUE] semantic_tx DROPPED (consumer behind) sent={sent} dropped={d}"
                                 );
                             }
                         }
@@ -530,54 +552,53 @@ fn run_direct_detection(app: &AppHandle, transcript: &str) -> bool {
         return false;
     }
 
-    // Resolve verse info from DB (needs AppState, but only briefly for DB lookup)
+    // Resolve verse info from DB (needs AppState, but only briefly for DB lookup).
+    // Blocking lock is OK — we're inside spawn_blocking. Emitting detections
+    // without verse text (the old try_lock fallback) left auto-queued items
+    // with an empty text field (issue #103).
     let app_managed: State<'_, Mutex<AppState>> = app.state();
-    let Ok(app_state) = app_managed.try_lock() else {
-        let bad = DIRECT_LOCK_CONTENDED.fetch_add(1, Ordering::Relaxed) + 1;
-        let good = DIRECT_LOCK_OK.load(Ordering::Relaxed);
-        log::warn!(
-            "[DET-DIRECT] AppState try_lock FAILED (contention) ok={good} contended={bad} — emitting without verse text"
-        );
-        // AppState locked — emit results without verse text
-        let results: Vec<super::detection::DetectionResult> = merged
-            .iter()
-            .map(|m| {
-                let vr = &m.detection.verse_ref;
-                super::detection::DetectionResult {
-                    verse_ref: format!("{} {}:{}", vr.book_name, vr.chapter, vr.verse_start),
-                    verse_text: String::new(),
-                    book_name: vr.book_name.clone(),
-                    book_number: vr.book_number,
-                    chapter: vr.chapter,
-                    verse: vr.verse_start,
-                    confidence: m.detection.confidence,
-                    source: "direct".to_string(),
-                    auto_queued: m.auto_queued,
-                    transcript_snippet: m.detection.transcript_snippet.clone(),
-                    is_chapter_only: m.detection.is_chapter_only,
-                }
-            })
-            .collect();
-        for r in &results {
-            log::info!("[DET-DIRECT] Found: {} ({:.0}%) (no DB)", r.verse_ref, r.confidence * 100.0);
+    let app_state = match app_managed.lock() {
+        Ok(s) => s,
+        Err(e) => {
+            log::error!("[DET-DIRECT] Failed to lock AppState for verse resolution: {e}");
+            return false;
         }
-        let _ = app.emit("verse_detections", &results);
-        return has_high_confidence;
     };
-    let ok = DIRECT_LOCK_OK.fetch_add(1, Ordering::Relaxed) + 1;
-    if ok % 50 == 0 {
-        let bad = DIRECT_LOCK_CONTENDED.load(Ordering::Relaxed);
-        log::info!("[DET-DIRECT] AppState lock stats ok={ok} contended={bad}");
-    }
-    let results: Vec<super::detection::DetectionResult> = merged
+    let mut results: Vec<super::detection::DetectionResult> = merged
         .iter()
         .map(|m| super::detection::to_result(&app_state, m))
         .collect();
+
+    // Backstop for issue #141: the detector validates against union-max verse
+    // counts across all translations, so a verse can still be missing from
+    // the *active* translation. Never emit a detection with no text.
+    if app_state.bible_db.is_some() {
+        results.retain(|r| {
+            if r.verse_text.is_empty() {
+                log::warn!(
+                    "[DET-DIRECT] Dropping {} — verse not found in active translation",
+                    r.verse_ref
+                );
+                false
+            } else {
+                true
+            }
+        });
+    }
 
     for r in &results {
         log::info!("[DET-DIRECT] Found: {} ({:.0}%)", r.verse_ref, r.confidence * 100.0);
     }
     drop(app_state);
+    if results.is_empty() {
+        return false;
+    }
+    log::info!(
+        "[LAT] emit verse_detections t={} src=direct n={} first={:?}",
+        epoch_ms(),
+        results.len(),
+        results.first().map_or("", |r| r.verse_ref.as_str())
+    );
     let _ = app.emit("verse_detections", &results);
     log::info!("[DET-DIRECT] Detection took {:?} for {:?}", t0.elapsed(), truncate_safe(transcript, 50));
     has_high_confidence
@@ -619,7 +640,7 @@ fn run_semantic_detection(app: &AppHandle, transcript: &str) {
         return;
     };
 
-    use super::detection::{FTS5_RANK0_CONFIDENCE, FTS5_CONFIDENCE_DECAY, FTS5_MIN_CONFIDENCE};
+    use rhema_detection::fusion::{FTS5_RANK0_CONFIDENCE, FTS5_CONFIDENCE_DECAY, FTS5_MIN_CONFIDENCE};
 
     let results: Vec<super::detection::DetectionResult> = fts
         .iter()
@@ -672,6 +693,12 @@ fn run_semantic_detection(app: &AppHandle, transcript: &str) {
         );
     }
     drop(app_state);
+    log::info!(
+        "[LAT] emit verse_detections t={} src=semantic n={} first={:?}",
+        epoch_ms(),
+        results.len(),
+        results.first().map_or("", |r| r.verse_ref.as_str())
+    );
     let _ = app.emit("verse_detections", &results);
     log::info!("[DET-SEMANTIC] Total: {:?}", t0.elapsed());
 }
@@ -779,6 +806,31 @@ fn check_reading_mode(app: &AppHandle, transcript: &str, direct_found: bool) -> 
 
     let rm_managed: &Mutex<ReadingMode> = app.state::<Mutex<ReadingMode>>().inner();
 
+    // If the utterance explicitly names a book that differs from the one
+    // being read, it's a spoken reference (possibly one direct detection
+    // rejected as non-existent), not an in-book navigation command. Reading
+    // mode must not reinterpret its numbers against its own book — that's
+    // how "Revelation chapter 20 verse 22" while reading Hebrews 12 ended
+    // up presenting Hebrews 12:22 (issue #141).
+    {
+        let rm_book = {
+            let Ok(rm) = rm_managed.lock() else { return false };
+            if rm.is_active() || rm.has_verses() { rm.current_book() } else { 0 }
+        };
+        if rm_book != 0 {
+            let detector_state: State<'_, Mutex<rhema_detection::DirectDetector>> = app.state();
+            let mentioned = match detector_state.lock() {
+                Ok(d) => d.mentioned_books(transcript),
+                Err(_) => Vec::new(),
+            };
+            drop(detector_state);
+            if !mentioned.is_empty() && !mentioned.contains(&rm_book) {
+                log::info!("[READING] Skipping — utterance names a different book than the one being read");
+                return false;
+            }
+        }
+    }
+
     // Check for chapter navigation commands (e.g., "let's go to chapter seven").
     {
         let chapter_change = {
@@ -816,12 +868,22 @@ fn check_reading_mode(app: &AppHandle, transcript: &str, direct_found: bool) -> 
                 if !chapter_verses.is_empty() {
                     let start_verse = change.start_verse.unwrap_or(1);
 
-                    // Find the text for the starting verse
-                    let start_verse_text = chapter_verses
+                    // Never navigate to a verse that doesn't exist in the
+                    // chapter (e.g. "chapter 12 verse 64") — presenting
+                    // verse 1's text under a wrong reference is worse than
+                    // ignoring the command (issue #141).
+                    let Some(start_verse_text) = chapter_verses
                         .iter()
                         .find(|v| v.verse == start_verse)
                         .map(|v| v.text.clone())
-                        .unwrap_or_else(|| chapter_verses[0].text.clone());
+                    else {
+                        log::warn!(
+                            "[READING] Ignoring chapter change — verse {start_verse} not in {} {}",
+                            change.book_name,
+                            change.new_chapter
+                        );
+                        return false;
+                    };
 
                     let verses: Vec<(i32, String)> = chapter_verses
                         .into_iter()

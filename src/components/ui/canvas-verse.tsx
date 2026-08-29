@@ -1,5 +1,6 @@
 import { useRef, useEffect, useState, useCallback, memo } from "react"
-import { renderVerse } from "@/lib/verse-renderer"
+import { onThemeFontsLoaded, renderVerse } from "@/lib/verse-renderer"
+import { preloadThemeImages, themeImageCache } from "@/lib/theme-image-cache"
 import type { BroadcastTheme, VerseRenderData } from "@/types"
 import { cn } from "@/lib/utils"
 
@@ -16,7 +17,6 @@ export const CanvasVerse = memo(function CanvasVerse({
 }: CanvasVerseProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const imageCacheRef = useRef<Map<string, HTMLImageElement>>(new Map())
   const [containerWidth, setContainerWidth] = useState(0)
 
   // Measure container width with ResizeObserver
@@ -52,41 +52,23 @@ export const CanvasVerse = memo(function CanvasVerse({
     const scale = displayW / theme.resolution.width
     renderVerse(ctx, theme, verse, {
       scale,
-      imageCache: imageCacheRef.current,
+      imageCache: themeImageCache(),
     })
   }, [theme, verse, containerWidth])
 
-  // Preload background + logo overlay images so the renderer can find them in the cache.
+  // Preload every image the theme uses so the renderer finds them in the cache.
   useEffect(() => {
-    const cache = imageCacheRef.current
-    const urls: string[] = []
-    if (theme.background.type === "image" && theme.background.image?.url) {
-      urls.push(theme.background.image.url)
-    }
-    if (theme.logoOverlay.enabled && theme.logoOverlay.image?.url) {
-      urls.push(theme.logoOverlay.image.url)
-    }
-
-    for (const url of urls) {
-      if (cache.has(url)) continue
-      const img = new Image()
-      img.onload = () => {
-        cache.set(url, img)
-        draw()
-      }
-      img.onerror = () => {
-        console.warn("[canvas-verse] failed to load image", {
-          url: url.slice(0, 100),
-        })
-      }
-      img.src = url
-    }
-  }, [theme.background, theme.logoOverlay, draw])
+    preloadThemeImages(theme, draw)
+  }, [theme, draw])
 
   // Redraw whenever theme, verse, or container size changes.
   useEffect(() => {
     draw()
   }, [draw])
+
+  // Redraw once theme webfonts load so early frames drawn against fallback
+  // font metrics are corrected.
+  useEffect(() => onThemeFontsLoaded(() => draw()), [draw])
 
   return (
     <div ref={containerRef} className={cn("w-full", className)}>

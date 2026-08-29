@@ -1,5 +1,6 @@
 use std::ffi::{c_void, CString};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Weak};
 
 use libloading::{Library, Symbol};
 use serde::{Deserialize, Serialize};
@@ -130,20 +131,100 @@ pub enum NdiError {
     InvalidFrameBufferSize { width: u32, height: u32 },
 }
 
+/// The loaded NDI runtime library plus the function pointers resolved from it.
+///
+/// Exactly one `NdiLibrary` exists while any NDI session is alive: sessions
+/// hold an `Arc<NdiLibrary>` and `NdiRuntime` keeps only a `Weak`, so
+/// `NDIlib_initialize`/`NDIlib_destroy` run once per load — not once per
+/// session — and the library unloads when the last session drops.
+struct NdiLibrary {
+    _library: Library,
+    send_create: NdiSendCreateFn,
+    send_destroy: NdiSendDestroyFn,
+    send_video: NdiSendVideoV2Fn,
+    ndi_destroy: NdiDestroyFn,
+}
+
+impl NdiLibrary {
+    fn load(search_dirs: &[PathBuf]) -> Result<Self, NdiError> {
+        let library_path = resolve_library_path(search_dirs)?;
+        log::info!("NDI: loading runtime library from {}", library_path.display());
+        // SAFETY: library_path was validated to exist by resolve_library_path()
+        let library = unsafe { Library::new(&library_path) }
+            .map_err(|e| NdiError::LibraryLoad(e.to_string()))?;
+
+        let initialize_fn = *load_symbol::<NdiInitializeFn>(&library, b"NDIlib_initialize\0", "NDIlib_initialize")?;
+        let ndi_destroy_fn = *load_symbol::<NdiDestroyFn>(&library, b"NDIlib_destroy\0", "NDIlib_destroy")?;
+        let send_create_fn = *load_symbol::<NdiSendCreateFn>(&library, b"NDIlib_send_create\0", "NDIlib_send_create")?;
+        let send_destroy_fn = *load_symbol::<NdiSendDestroyFn>(&library, b"NDIlib_send_destroy\0", "NDIlib_send_destroy")?;
+        let send_video_fn =
+            *load_symbol::<NdiSendVideoV2Fn>(&library, b"NDIlib_send_send_video_v2\0", "NDIlib_send_send_video_v2")?;
+
+        // SAFETY: initialize_fn is a valid function pointer loaded from the NDI library
+        if !unsafe { initialize_fn() } {
+            return Err(NdiError::InitializeFailed);
+        }
+
+        Ok(Self {
+            _library: library,
+            send_create: send_create_fn,
+            send_destroy: send_destroy_fn,
+            send_video: send_video_fn,
+            ndi_destroy: ndi_destroy_fn,
+        })
+    }
+}
+
+impl Drop for NdiLibrary {
+    fn drop(&mut self) {
+        log::info!("NDI: last session closed — destroying NDI runtime");
+        // SAFETY: NDIlib_initialize succeeded in load(); this is the sole
+        // NDIlib_destroy call site and runs once, when the last Arc drops.
+        unsafe { (self.ndi_destroy)() };
+    }
+}
+
 #[derive(Default)]
 pub struct NdiRuntime {
     sessions: std::collections::HashMap<String, ActiveNdiSession>,
+    /// Weak handle to the shared library so concurrent sessions reuse one
+    /// load/initialize, while an idle runtime holds nothing alive.
+    library: Weak<NdiLibrary>,
+    /// Directories searched (in order) for the NDI runtime library before the
+    /// compile-time dev fallback. In production this is the Tauri resource dir.
+    library_search_dirs: Vec<PathBuf>,
 }
 
 impl std::fmt::Debug for NdiRuntime {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("NdiRuntime")
             .field("active_sessions", &self.sessions.len())
+            .field("library_loaded", &(self.library.strong_count() > 0))
+            .field("library_search_dirs", &self.library_search_dirs)
             .finish()
     }
 }
 
 impl NdiRuntime {
+    /// Set the directories searched for the NDI runtime library, in order of
+    /// preference. The compile-time dev checkout path stays as a fallback.
+    pub fn set_library_search_dirs(&mut self, dirs: Vec<PathBuf>) {
+        self.library_search_dirs = dirs;
+    }
+
+    /// Reuse the already-loaded NDI library, or load and initialize it fresh
+    /// when no session currently holds it.
+    fn shared_library(&mut self) -> Result<Arc<NdiLibrary>, NdiError> {
+        if let Some(library) = self.library.upgrade() {
+            return Ok(library);
+        }
+        let mut search_dirs = self.library_search_dirs.clone();
+        search_dirs.push(dev_fallback_dir());
+        let library = Arc::new(NdiLibrary::load(&search_dirs)?);
+        self.library = Arc::downgrade(&library);
+        Ok(library)
+    }
+
     /// Check if a specific session is active.
     pub fn is_active(&self, session_id: &str) -> bool {
         self.sessions.contains_key(session_id)
@@ -159,14 +240,18 @@ impl NdiRuntime {
         session_id: String,
         request: NdiStartRequest,
     ) -> Result<NdiSessionInfo, NdiError> {
+        log::info!("NDI[{session_id}]: starting session '{}'", request.source_name);
+        // Hold the library before dropping the old session, so restarting the
+        // only active session doesn't unload and immediately reload the runtime.
+        let library = self.shared_library()?;
+
         // Stop existing session with this ID if running
         if let Some(existing) = self.sessions.remove(&session_id) {
             log::info!("NDI[{session_id}]: shutting down existing session before restart");
             drop(existing);
         }
 
-        log::info!("NDI[{session_id}]: starting session '{}'", request.source_name);
-        let session = ActiveNdiSession::create(request)?;
+        let session = ActiveNdiSession::create(request, library)?;
         let info = session.info.clone();
         log::info!(
             "NDI[{session_id}]: session active — {}x{} @ {}fps",
@@ -209,12 +294,9 @@ impl NdiRuntime {
 }
 
 struct ActiveNdiSession {
-    _library: Library,
+    library: Arc<NdiLibrary>,
     _sender_name: CString,
     sender: NdiSendInstance,
-    send_destroy: NdiSendDestroyFn,
-    send_video: NdiSendVideoV2Fn,
-    ndi_destroy: NdiDestroyFn,
     info: NdiSessionInfo,
     frame_count: u64,
     frame_buffer: Vec<u8>,
@@ -231,27 +313,10 @@ unsafe impl Sync for NdiRuntime {}
 
 impl ActiveNdiSession {
     #[expect(clippy::needless_pass_by_value, reason = "request fields are destructured and moved into the session")]
-    fn create(request: NdiStartRequest) -> Result<Self, NdiError> {
+    fn create(request: NdiStartRequest, library: Arc<NdiLibrary>) -> Result<Self, NdiError> {
         let source_name = request.source_name.trim().to_string();
         if source_name.is_empty() {
             return Err(NdiError::EmptySourceName);
-        }
-
-        let library_path = resolve_library_path()?;
-        // SAFETY: library_path was validated to exist by resolve_library_path()
-        let library = unsafe { Library::new(&library_path) }
-            .map_err(|e| NdiError::LibraryLoad(e.to_string()))?;
-
-        let initialize_fn = *load_symbol::<NdiInitializeFn>(&library, b"NDIlib_initialize\0", "NDIlib_initialize")?;
-        let ndi_destroy_fn = *load_symbol::<NdiDestroyFn>(&library, b"NDIlib_destroy\0", "NDIlib_destroy")?;
-        let send_create_fn = *load_symbol::<NdiSendCreateFn>(&library, b"NDIlib_send_create\0", "NDIlib_send_create")?;
-        let send_destroy_fn = *load_symbol::<NdiSendDestroyFn>(&library, b"NDIlib_send_destroy\0", "NDIlib_send_destroy")?;
-        let send_video_fn =
-            *load_symbol::<NdiSendVideoV2Fn>(&library, b"NDIlib_send_send_video_v2\0", "NDIlib_send_send_video_v2")?;
-
-        // SAFETY: initialize_fn is a valid function pointer loaded from the NDI library
-        if !unsafe { initialize_fn() } {
-            return Err(NdiError::InitializeFailed);
         }
 
         let name = CString::new(source_name.clone()).map_err(|_| NdiError::EmptySourceName)?;
@@ -262,14 +327,17 @@ impl ActiveNdiSession {
             clock_audio: false,
         };
 
-        // SAFETY: send_create_fn is a valid function pointer. The NdiSendCreate struct has valid
+        // SAFETY: send_create is a valid function pointer. The NdiSendCreate struct has valid
         // pointers (name is a CString kept alive by _sender_name field). p_groups is null which
         // NDI accepts.
         let create_ptr = std::ptr::from_ref(&create);
-        let sender = unsafe { send_create_fn(create_ptr) };
+        let sender = unsafe { (library.send_create)(create_ptr) };
         if sender.is_null() {
-            // SAFETY: NDI was initialized successfully above, so ndi_destroy is safe to call
-            unsafe { ndi_destroy_fn() };
+            let os_err = std::io::Error::last_os_error();
+            log::error!(
+                "NDI: NDIlib_send_create returned null for '{source_name}' (last OS error: {os_err})"
+            );
+            // NDIlib_destroy fires via the Arc<NdiLibrary> drop if this was the only holder.
             return Err(NdiError::SenderCreateFailed);
         }
 
@@ -277,12 +345,9 @@ impl ActiveNdiSession {
         let fps = request.frame_rate.fps();
 
         Ok(Self {
-            _library: library,
+            library,
             _sender_name: name,
             sender,
-            send_destroy: send_destroy_fn,
-            send_video: send_video_fn,
-            ndi_destroy: ndi_destroy_fn,
             info: NdiSessionInfo {
                 source_name,
                 resolution: request.resolution,
@@ -359,7 +424,7 @@ impl ActiveNdiSession {
         let sender = self.sender;
         let frame_ptr = std::ptr::from_ref(&frame);
         unsafe {
-            (self.send_video)(sender, frame_ptr);
+            (self.library.send_video)(sender, frame_ptr);
         }
         self.frame_count += 1;
         if self.frame_count == 1 {
@@ -374,41 +439,51 @@ impl ActiveNdiSession {
 impl Drop for ActiveNdiSession {
     fn drop(&mut self) {
         // SAFETY: sender was created by NDIlib_send_create and is non-null (validated in create()).
-        // send_destroy and ndi_destroy are valid function pointers loaded from the NDI library.
-        // The library (_library field) is kept alive by this struct and will be dropped after this.
+        // send_destroy is a valid function pointer kept alive by the Arc<NdiLibrary>, which drops
+        // after this struct's fields — running NDIlib_destroy only once the last session is gone.
         let sender = self.sender;
         unsafe {
-            (self.send_destroy)(sender);
-            (self.ndi_destroy)();
+            (self.library.send_destroy)(sender);
         }
     }
 }
 
-fn resolve_library_path() -> Result<PathBuf, NdiError> {
-    let candidates: Vec<&str> = if cfg!(target_os = "macos") {
-        vec!["sdk/ndi/macos/libndi.dylib"]
+/// Relative locations of the NDI runtime library for the current OS. The same
+/// layout is used by the repo checkout (`sdk/…` at the workspace root) and by
+/// the bundled app (`sdk/…` inside the Tauri resource dir).
+fn library_candidates() -> &'static [&'static str] {
+    if cfg!(target_os = "macos") {
+        &["sdk/ndi/macos/libndi.dylib"]
     } else if cfg!(target_os = "windows") {
-        vec!["sdk/ndi/windows/Processing.NDI.Lib.x64.dll"]
+        &["sdk/ndi/windows/Processing.NDI.Lib.x64.dll"]
     } else {
-        vec![
+        &[
             "sdk/ndi/linux/libndi.so",
             "sdk/ndi/linux/x86_64/libndi.so.6",
             "sdk/ndi/linux/libndi.so.6",
         ]
-    };
+    }
+}
 
-    let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    for candidate in &candidates {
-        if candidate.is_empty() {
-            continue;
-        }
-        let absolute = base.join(candidate);
-        if absolute.exists() {
-            return Ok(absolute);
+/// Dev fallback: the workspace root of a source checkout. Only meaningful on
+/// the machine the binary was compiled on.
+fn dev_fallback_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..")
+}
+
+fn resolve_library_path(search_dirs: &[PathBuf]) -> Result<PathBuf, NdiError> {
+    let mut attempted = Vec::new();
+    for base in search_dirs {
+        for candidate in library_candidates() {
+            let absolute = base.join(candidate);
+            if absolute.exists() {
+                return Ok(absolute);
+            }
+            attempted.push(absolute.display().to_string());
         }
     }
 
-    Err(NdiError::LibraryNotFound(candidates.join(", ")))
+    Err(NdiError::LibraryNotFound(attempted.join(", ")))
 }
 
 fn load_symbol<'a, T>(
@@ -421,4 +496,64 @@ fn load_symbol<'a, T>(
         symbol: name,
         message: e.to_string(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Unique per-test scratch dir, removed on drop.
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(tag: &str) -> Self {
+            let dir = std::env::temp_dir()
+                .join(format!("rhema-ndi-test-{tag}-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn plant_library(base: &Path) -> PathBuf {
+        let path = base.join(library_candidates()[0]);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"stub").unwrap();
+        path
+    }
+
+    #[test]
+    fn resolves_library_from_search_dir() {
+        let dir = TempDir::new("resolve");
+        let planted = plant_library(&dir.0);
+        let resolved = resolve_library_path(std::slice::from_ref(&dir.0)).unwrap();
+        assert_eq!(resolved, planted);
+    }
+
+    #[test]
+    fn earlier_search_dirs_win() {
+        let first = TempDir::new("first");
+        let second = TempDir::new("second");
+        let planted_first = plant_library(&first.0);
+        let _planted_second = plant_library(&second.0);
+        let resolved = resolve_library_path(&[first.0.clone(), second.0.clone()]).unwrap();
+        assert_eq!(resolved, planted_first);
+    }
+
+    #[test]
+    fn missing_library_reports_attempted_paths() {
+        let dir = TempDir::new("missing");
+        let err = resolve_library_path(std::slice::from_ref(&dir.0)).unwrap_err();
+        match err {
+            NdiError::LibraryNotFound(paths) => {
+                assert!(paths.contains(dir.0.to_str().unwrap()), "attempted paths: {paths}");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
 }

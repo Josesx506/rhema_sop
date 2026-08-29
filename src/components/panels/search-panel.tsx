@@ -2,7 +2,11 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react"
 import { invoke } from "@tauri-apps/api/core"
 // Using native overflow-y-auto instead of Radix ScrollArea for reliable scrolling in flex layouts
 import { Button } from "@/components/ui/button"
-import { getAutocompleteSuggestion, getTabNavigationResult } from "@/lib/quick-search"
+import {
+  getAutocompleteSuggestion,
+  getTabNavigationResult,
+  parseTypedReference,
+} from "@/lib/quick-search"
 import {
   Select,
   SelectContent,
@@ -25,13 +29,54 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import { useBible, bibleActions } from "@/hooks/use-bible"
+import { useBible, bibleActions, findLoadedVerse } from "@/hooks/use-bible"
+import { presentVerse } from "@/hooks/use-broadcast"
 import { useBibleStore, useQueueStore } from "@/stores"
 import type { Book, Verse, SemanticSearchResult } from "@/types"
 import { Input } from "@/components/ui/input"
 import { searchContextWithFuse } from "@/lib/context-search"
+import { mark } from "@/lib/latency-marks"
 
-type SearchTab = "book" | "context" 
+type SearchTab = "book" | "context"
+
+const RESULT_SOURCE_STYLES: Record<string, { text: string; label: string }> = {
+  reference: { text: "text-amber-500", label: "Reference" },
+  keyword: { text: "text-green-600", label: "Keyword" },
+  semantic: { text: "text-indigo-300", label: "Semantic" },
+}
+
+/**
+ * Source badges for a search result, with a real cosine percentage shown
+ * only on semantic hits. Keyword ranks come from BM25 and reference hits
+ * are exact — neither has an honest percentage to show.
+ */
+function ResultSourceBadges({ result }: { result: SemanticSearchResult }) {
+  const sources = result.sources?.length ? result.sources : ["keyword"]
+  return (
+    <span className="mt-0.5 flex items-center gap-1">
+      {sources.map((source) => {
+        const style = RESULT_SOURCE_STYLES[source]
+        if (!style) return null
+        return (
+          <span
+            key={source}
+            className={cn(
+              "text-[0.5rem] font-medium uppercase tracking-wider",
+              style.text
+            )}
+          >
+            {style.label}
+          </span>
+        )
+      })}
+      {result.sources?.includes("semantic") && (
+        <span className="text-[0.5rem] text-muted-foreground">
+          {Math.round(result.similarity * 100)}%
+        </span>
+      )}
+    </span>
+  )
+}
 
 /** Highlights words from the query that appear in the text. */
 function HighlightedText({ text, query }: { text: string; query: string }) {
@@ -61,11 +106,14 @@ function HighlightedText({ text, query }: { text: string; query: string }) {
   )
 }
 
+// Monotonic ticket so an older chapter load that resolves late can neither
+// select its verse nor clear a newer navigation's pending target.
+let navSeq = 0
+
 export function SearchPanel() {
   const [activeTab, setActiveTab] = useState<SearchTab>("book")
   const [selectedBook, setSelectedBook] = useState<Book | null>(null)
   const [chapter, setChapter] = useState(1)
-  const [selectedVerseId, setSelectedVerseId] = useState<number | null>(null)
   const [contextQuery, setContextQuery] = useState("")
 
   // EasyWorship-style autocomplete
@@ -113,24 +161,64 @@ export function SearchPanel() {
     }
   }, [selectedBookNumber, chapter, activeTranslationId])
 
-  const effectiveSelectedVerseId = useMemo(() => {
-    if (!selectedVerseId || currentChapter.length === 0) return null
-    if (currentChapter.some((v) => v.id === selectedVerseId)) return selectedVerseId
-    if (!selectedVerse) return null
-    return currentChapter.find((v) => v.verse === selectedVerse.verse)?.id ?? null
-  }, [currentChapter, selectedVerseId, selectedVerse])
+  // The highlight follows the store, not component state, so a remote command
+  // or a keyboard shortcut moves it just as a click does. Matching on
+  // book/chapter/verse is also what drops the highlight when the operator
+  // changes chapter — the selected verse no longer belongs to what's on screen.
+  const effectiveSelectedVerseId = useMemo(
+    () =>
+      findLoadedVerse(
+        currentChapter,
+        selectedVerse
+          ? {
+              bookNumber: selectedVerse.book_number,
+              chapter: selectedVerse.chapter,
+              verse: selectedVerse.verse,
+            }
+          : null
+      )?.id ?? null,
+    [currentChapter, selectedVerse]
+  )
 
-  // After chapter reloads (e.g., translation change), re-select by verse number
+  // After a chapter reloads in a different translation the verse rows carry new
+  // ids, so re-point the selection at the row that is actually on screen.
   useEffect(() => {
-    if (!selectedVerseId || !selectedVerse || currentChapter.length === 0) return
-    const stillExists = currentChapter.some((v) => v.id === selectedVerseId)
-    if (!stillExists) {
-      const match = currentChapter.find((v) => v.verse === selectedVerse.verse)
-      if (match && match.id !== selectedVerse.id) {
-        bibleActions.selectVerse(match)
-      }
+    if (!selectedVerse || currentChapter.length === 0) return
+    const match = currentChapter.find(
+      (v) =>
+        v.book_number === selectedVerse.book_number &&
+        v.chapter === selectedVerse.chapter &&
+        v.verse === selectedVerse.verse
+    )
+    if (match && match.id !== selectedVerse.id) {
+      bibleActions.selectVerse(match)
     }
-  }, [currentChapter, selectedVerseId, selectedVerse])
+  }, [currentChapter, selectedVerse])
+
+  // The one place a verse row is scrolled into view. Driven by an explicit
+  // reveal request rather than by `selectedVerse`, because `presentVerse`
+  // selects a verse on every auto-live detection and must not drag the
+  // operator's scroll position around mid-service.
+  const revealRequest = useBibleStore((s) => s.revealRequest)
+  useEffect(() => {
+    if (revealRequest === 0) return
+    const { selectedVerse: target, currentChapter: chapterVerses, revealBlock } =
+      useBibleStore.getState()
+    const row = findLoadedVerse(
+      chapterVerses,
+      target
+        ? {
+            bookNumber: target.book_number,
+            chapter: target.chapter,
+            verse: target.verse,
+          }
+        : null
+    )
+    if (!row) return
+    document
+      .getElementById(`verse-${row.id}`)
+      ?.scrollIntoView({ behavior: "smooth", block: revealBlock })
+  }, [revealRequest])
 
   const applyNavigationSelection = useCallback(
     (book: Book, navChapter: number) => {
@@ -152,29 +240,41 @@ export function SearchPanel() {
         return
       }
 
-      const { bookNumber, chapter: navChapter, verse: navVerse } = pendingNavigation
-      const pendingKey = `${bookNumber}:${navChapter}:${navVerse}`
+      const { bookNumber, chapter: navChapter, verse: navVerse, present } = pendingNavigation
+      const pendingKey = `${bookNumber}:${navChapter}:${navVerse}:${present ? "live" : ""}`
       if (pendingKey === lastHandledKey) return
 
       const book = state.books.find((b) => b.book_number === bookNumber)
-      if (!book) return
+      if (!book) {
+        // Unreachable navigation — clear it, or every later step chains off a
+        // target that can never land. Reachable with no Bible database, where
+        // the book list stays empty indefinitely.
+        useBibleStore.getState().setPendingNavigation(null)
+        return
+      }
 
       lastHandledKey = pendingKey
       applyNavigationSelection(book, navChapter)
 
-      // Load chapter explicitly, then select + scroll to the verse.
+      navSeq += 1
+      const ticket = navSeq
+
+      // Load chapter explicitly, then select + reveal the verse.
+      mark(`nav loadChapter start ${bookNumber} ${navChapter}:${navVerse}`)
       bibleActions.loadChapter(bookNumber, navChapter).then((verses) => {
+        mark(`nav loadChapter done ${bookNumber} ${navChapter}:${navVerse} n=${verses.length}`)
+        if (ticket !== navSeq) return
         const target = verses.find((v) => v.verse === navVerse)
         if (target) {
-          setSelectedVerseId(target.id)
           bibleActions.selectVerse(target)
-          document
-            .getElementById(`verse-${target.id}`)
-            ?.scrollIntoView({ behavior: "smooth", block: "center" })
+          if (present) void presentVerse(target)
+          useBibleStore.getState().requestVerseReveal("center")
         }
         panelRef.current?.focus()
       }).catch(console.error).finally(() => {
-        useBibleStore.getState().setPendingNavigation(null)
+        // Only the newest load may clear the pending target; a stale one would
+        // wipe the cursor the next step is chaining off.
+        if (ticket === navSeq) useBibleStore.getState().setPendingNavigation(null)
       })
     })
 
@@ -182,56 +282,31 @@ export function SearchPanel() {
   }, [applyNavigationSelection])
 
   const handleVerseClick = useCallback((verse: Verse) => {
-    setSelectedVerseId(verse.id)
     bibleActions.selectVerse(verse)
+    void presentVerse(verse)
   }, [])
 
-  // Arrow key navigation
+  // Arrow key navigation. Up and Down run the same stepping action the remote
+  // bible_next / bible_prev commands do, so the two surfaces cannot diverge.
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (e.key === "ArrowLeft") {
         e.preventDefault()
         if (chapter > 1) {
           setChapter((c) => c - 1)
-            setSelectedVerseId(null)
         }
       } else if (e.key === "ArrowRight") {
         e.preventDefault()
         setChapter((c) => c + 1)
-        setSelectedVerseId(null)
       } else if (e.key === "ArrowDown") {
         e.preventDefault()
-        if (currentChapter.length === 0) return
-        const currentIdx = effectiveSelectedVerseId
-          ? currentChapter.findIndex((v) => v.id === effectiveSelectedVerseId)
-          : -1
-        const nextIdx = Math.min(currentIdx + 1, currentChapter.length - 1)
-        const next = currentChapter[nextIdx]
-        if (next) {
-          setSelectedVerseId(next.id)
-          bibleActions.selectVerse(next)
-          document
-            .getElementById(`verse-${next.id}`)
-            ?.scrollIntoView({ behavior: "smooth", block: "nearest" })
-        }
+        void bibleActions.stepVerse("next", { present: true })
       } else if (e.key === "ArrowUp") {
         e.preventDefault()
-        if (currentChapter.length === 0) return
-        const currentIdx = effectiveSelectedVerseId
-          ? currentChapter.findIndex((v) => v.id === effectiveSelectedVerseId)
-          : currentChapter.length
-        const prevIdx = Math.max(currentIdx - 1, 0)
-        const prev = currentChapter[prevIdx]
-        if (prev) {
-          setSelectedVerseId(prev.id)
-          bibleActions.selectVerse(prev)
-          document
-            .getElementById(`verse-${prev.id}`)
-            ?.scrollIntoView({ behavior: "smooth", block: "nearest" })
-        }
+        void bibleActions.stepVerse("prev", { present: true })
       }
     },
-    [chapter, currentChapter, effectiveSelectedVerseId]
+    [chapter]
   )
 
   // Context search — hybrid backend (vector + FTS5 BM25) as primary,
@@ -243,6 +318,46 @@ export function SearchPanel() {
     const requestId = ++contextSearchRequestIdRef.current
     const isStale = () => requestId !== contextSearchRequestIdRef.current
 
+    // A fully-typed reference ("John 3:16", "jn 3 16", "1 cor 13:4") pins
+    // the exact verse at the top; hybrid search still runs beneath it.
+    let referenceResult: SemanticSearchResult | null = null
+    const reference = parseTypedReference(query, useBibleStore.getState().books)
+    if (reference) {
+      const verse = await invoke<Verse | null>("get_verse", {
+        translationId,
+        bookNumber: reference.book.book_number,
+        chapter: reference.chapter,
+        verse: reference.verse,
+      }).catch(() => null)
+      if (isStale()) return
+      if (verse) {
+        referenceResult = {
+          verse_ref: `${verse.book_name} ${verse.chapter}:${verse.verse}`,
+          verse_text: verse.text,
+          book_name: verse.book_name,
+          book_number: verse.book_number,
+          chapter: verse.chapter,
+          verse: verse.verse,
+          similarity: 1,
+          sources: ["reference"],
+        }
+      }
+    }
+
+    const pinReference = (results: SemanticSearchResult[]) => {
+      if (!referenceResult) return results
+      const pinned = referenceResult
+      return [
+        pinned,
+        ...results.filter(
+          (r) =>
+            r.book_number !== pinned.book_number ||
+            r.chapter !== pinned.chapter ||
+            r.verse !== pinned.verse
+        ),
+      ]
+    }
+
     // Primary: hybrid search backend (combines vector + FTS5 BM25)
     const hybridResults = await invoke<SemanticSearchResult[]>(
       "semantic_search", { query, limit: 15 }
@@ -250,15 +365,15 @@ export function SearchPanel() {
 
     if (isStale()) return
 
-    if (hybridResults && hybridResults.length > 0) {
-      useBibleStore.getState().setSemanticResults(hybridResults)
+    if ((hybridResults && hybridResults.length > 0) || referenceResult) {
+      useBibleStore.getState().setSemanticResults(pinReference(hybridResults ?? []))
       return
     }
 
     // Fallback: client-side Fuse.js when semantic model is not loaded
     const fuseResults = await searchContextWithFuse(query, translationId, 15).catch(() => [])
     if (isStale()) return
-    useBibleStore.getState().setSemanticResults(fuseResults)
+    useBibleStore.getState().setSemanticResults(pinReference(fuseResults))
   }, [])
 
   const handleContextSearch = useCallback((query: string) => {
@@ -341,9 +456,18 @@ export function SearchPanel() {
       return
     }
 
-    // Enter clears input (verse is already showing in panel)
+    // Enter commits the typed reference: send it live and clear the input
     if (e.key === "Enter") {
       e.preventDefault()
+      const result = autocompleteResult
+      if (result.matchedBook && result.chapter && result.verse) {
+        useBibleStore.getState().setPendingNavigation({
+          bookNumber: result.matchedBook.book_number,
+          chapter: result.chapter,
+          verse: result.verse,
+          present: true,
+        })
+      }
       setQuickInput("")
       setShowQuickVerses(false)
       return
@@ -356,13 +480,14 @@ export function SearchPanel() {
       setShowQuickVerses(false)
       return
     }
-  }, [quickInput, quickSuggestion])
+  }, [quickInput, quickSuggestion, autocompleteResult])
 
   const handleQuickVerseClick = useCallback((verse: Verse) => {
     useBibleStore.getState().setPendingNavigation({
       bookNumber: verse.book_number,
       chapter: verse.chapter,
-      verse: verse.verse
+      verse: verse.verse,
+      present: true,
     })
     setQuickInput("")
     setShowQuickVerses(false)
@@ -540,7 +665,6 @@ export function SearchPanel() {
                 onClick={() => {
                   if (chapter > 1) {
                     setChapter((c) => c - 1)
-                                setSelectedVerseId(null)
                   }
                 }}
                 disabled={chapter <= 1}
@@ -552,7 +676,6 @@ export function SearchPanel() {
                 size="icon-xs"
                 onClick={() => {
                   setChapter((c) => c + 1)
-                            setSelectedVerseId(null)
                 }}
               >
                 <ArrowRightIcon className="size-3" />
@@ -662,7 +785,7 @@ export function SearchPanel() {
               <div
                 key={`${result.book_number}-${result.chapter}-${result.verse}-${idx}`}
                 onClick={() => {
-                  bibleActions.selectVerse({
+                  const verse: Verse = {
                     id: 0,
                     translation_id: activeTranslationId,
                     book_number: result.book_number,
@@ -671,7 +794,9 @@ export function SearchPanel() {
                     chapter: result.chapter,
                     verse: result.verse,
                     text: result.verse_text,
-                  })
+                  }
+                  bibleActions.selectVerse(verse)
+                  void presentVerse(verse)
                 }}
                 className="group flex flex-col cursor-pointer gap-1 rounded-lg p-3 transition-colors hover:bg-muted/50 relative"
               >
@@ -679,11 +804,7 @@ export function SearchPanel() {
                   <span className="text-xs font-semibold ">
                     {result.book_name}   {result.chapter}:{result.verse}
                   </span>
-                  <span
-                    className="mt-0.5 text-[0.5rem] text-muted-foreground"
-                  >
-                    {Math.round(result.similarity * 100)}%
-                  </span>
+                  <ResultSourceBadges result={result} />
                 </div>
                 <p className="flex-1 text-xs leading-relaxed text-muted-foreground">
                   <HighlightedText text={result.verse_text} query={contextQuery} />

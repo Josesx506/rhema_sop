@@ -14,6 +14,7 @@ thiserror.workspace = true
 aho-corasick = "1"
 lru = "0.12"
 rhema-bible = { path = "../bible" }
+regex = "1"
 
 # Optional heavy dependencies for real embedding / vector search
 ort = { version = "2.0.0-rc.12", optional = true }
@@ -29,8 +30,14 @@ default = []
 onnx = ["ort", "ndarray", "tokenizers"]
 vector-search = ["bytemuck"]
 precompute-bin = ["onnx", "vector-search", "env_logger"]
+bench-bin = ["onnx", "vector-search", "env_logger"]
 
 [[bin]]
 name = "precompute"
 path = "src/bin/precompute.rs"
 required-features = ["precompute-bin"]
+
+[[bin]]
+name = "search_bench"
+path = "src/bin/search_bench.rs"
+required-features = ["bench-bin"]

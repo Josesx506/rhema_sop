@@ -16,6 +16,38 @@ export interface RenderOptions {
   imageCache?: Map<string, HTMLImageElement>
 }
 
+/** A freely positioned element region, all values in % of canvas size (0-100), x/y = top-left. */
+export interface ElementBox {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+/** An image fill: how a picture is fitted into whatever rect it is drawn in. */
+export interface ThemeImageFill {
+  url: string
+  fit: "cover" | "contain" | "stretch"
+  blur: number
+  brightness: number
+  tint: string | null
+}
+
+/**
+ * A filled surface drawn behind content — the container the text lives in.
+ * Content wraps inside it, inset by `padding`.
+ */
+export interface SurfaceFill {
+  enabled: boolean
+  color: string
+  opacity: number
+  borderRadius: number
+  /** Inset for the content on this surface, in theme px. */
+  padding: number
+  /** When set, fills the surface, clipped to `borderRadius`. */
+  image: ThemeImageFill | null
+}
+
 export type TextHorizontalAlign = "left" | "center" | "right" | "justify"
 export type TextVerticalAlign = "top" | "middle" | "bottom"
 export type TextTransform = "none" | "uppercase" | "lowercase" | "capitalize"
@@ -45,21 +77,13 @@ export interface BroadcastTheme {
       angle: number
       stops: { color: string; position: number }[]
     } | null
-    image: {
-      url: string
-      fit: "cover" | "contain" | "stretch"
-      blur: number
-      brightness: number
-      tint: string | null
-    } | null
+    image: ThemeImageFill | null
   }
-  textBox: {
-    enabled: boolean
-    color: string
-    opacity: number
-    borderRadius: number
-    padding: number
-  }
+  /**
+   * The container holding the reference + verse block. Its fill can be a
+   * colour or an image, and the text wraps inside it.
+   */
+  textBox: SurfaceFill
   verseText: {
     fontFamily: string
     fontSize: number
@@ -73,6 +97,8 @@ export interface BroadcastTheme {
     letterSpacing: number
     shadow: { color: string; blur: number; x: number; y: number } | null
     outline: { color: string; width: number } | null
+    /** Optional plate behind the verse text alone. Absent means none. */
+    surface?: SurfaceFill
   }
   verseNumbers: {
     visible: boolean
@@ -92,6 +118,8 @@ export interface BroadcastTheme {
     uppercase: boolean
     letterSpacing: number
     position: "above" | "below" | "inline"
+    /** Optional chip behind the reference alone. Absent means none. */
+    surface?: SurfaceFill
   }
   layout: {
     anchor: AnchorPosition
@@ -104,6 +132,10 @@ export interface BroadcastTheme {
     textAreaWidth: number
     textAreaHeight: number
     referenceGap?: number
+    /** "stacked" (default): reference + verse flow as one block. "free": each is positioned by its box. */
+    mode?: "stacked" | "free"
+    referenceBox?: ElementBox
+    verseBox?: ElementBox
   }
   transition: {
     type: "fade" | "slide" | "scale" | "none"

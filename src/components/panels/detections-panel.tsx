@@ -1,31 +1,33 @@
+import { useEffect, useMemo } from "react"
 import { PanelHeader } from "@/components/ui/panel-header"
 import { ConfidenceDot } from "@/components/ui/confidence-dot"
 import { Button } from "@/components/ui/button"
-import { PlayIcon, PlusIcon } from "lucide-react"
+import { PlayIcon, PlusIcon, XIcon } from "lucide-react"
+import { cn } from "@/lib/utils"
 import { useDetection, detectionActions } from "@/hooks/use-detection"
 import { bibleActions } from "@/hooks/use-bible"
-import { useQueueStore, useBroadcastStore, useBibleStore } from "@/stores"
-import { toVerseRenderData } from "@/hooks/use-broadcast"
+import { useQueueStore, useBibleStore } from "@/stores"
+import { presentVerse } from "@/hooks/use-broadcast"
+import { mark } from "@/lib/latency-marks"
 import type { DetectionResult } from "@/types"
 
-const SOURCE_COLORS: Record<string, { bg: string; text: string; label: string }> = {
-  direct: { bg: "bg-green-500/15", text: "text-green-600", label: "Direct" },
-  semantic: { bg: "bg-indigo-500/15", text: "text-indigo-300", label: "Semantic" },
-}
-
-function SourceBadge({ source }: { source: string }) {
-  const style = SOURCE_COLORS[source] ?? { bg: "bg-muted", text: "text-muted-foreground", label: source }
-  return (
-    <span className={`rounded px-1.5 py-0.5 text-[0.5625rem] font-medium uppercase tracking-wider ${style.bg} ${style.text}`}>
-      {style.label}
-    </span>
-  )
+const SOURCE_COLORS: Record<string, { text: string; label: string }> = {
+  direct: { text: "text-green-600", label: "Direct" },
+  semantic: { text: "text-indigo-300", label: "Semantic" },
 }
 
 function DetectionCard({ detection }: { detection: DetectionResult }) {
   const handlePresent = () => {
-    // Select this verse for preview
-    bibleActions.selectVerse({
+    // Navigate book search panel to this verse
+    if (detection.book_number > 0) {
+      bibleActions.navigateToVerse(
+        detection.book_number,
+        detection.chapter,
+        detection.verse
+      )
+    }
+    // Refetch full verse text, select for preview, and set live
+    void presentVerse({
       id: 0,
       translation_id: useBibleStore.getState().activeTranslationId,
       book_number: detection.book_number,
@@ -35,35 +37,30 @@ function DetectionCard({ detection }: { detection: DetectionResult }) {
       verse: detection.verse,
       text: detection.verse_text,
     })
-    // Navigate book search panel to this verse
-    if (detection.book_number > 0) {
-      bibleActions.navigateToVerse(
-        detection.book_number,
-        detection.chapter,
-        detection.verse
-      )
-    }
-    // Set broadcast live verse
-    const translation = useBibleStore.getState().translations
-      .find(t => t.id === useBibleStore.getState().activeTranslationId)?.abbreviation ?? "KJV"
-    useBroadcastStore.getState().setLiveVerse(
-      toVerseRenderData({
-        id: 0, translation_id: useBibleStore.getState().activeTranslationId,
-        book_number: detection.book_number, book_name: detection.book_name,
-        book_abbreviation: "", chapter: detection.chapter,
-        verse: detection.verse, text: detection.verse_text,
-      }, translation)
-    )
   }
 
   return (
-    <div className="border-b border-border p-3 last:border-0">
+    <div className="group border-b border-border p-3 last:border-0">
       <div className="flex items-center gap-2">
         <ConfidenceDot confidence={detection.confidence} />
-        <SourceBadge source={detection.source} />
-        <span className="text-sm font-semibold text-foreground">
+        <span className="flex-1 truncate text-sm font-semibold text-foreground">
           {detection.verse_ref}
         </span>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-label={`Dismiss ${detection.verse_ref}`}
+          title="Dismiss"
+          className="shrink-0 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+          onClick={() =>
+            detectionActions.dismissDetection(
+              detection.verse_ref,
+              detection.source
+            )
+          }
+        >
+          <XIcon className="size-2.5" />
+        </Button>
       </div>
 
       {detection.verse_text && (
@@ -109,8 +106,69 @@ function DetectionCard({ detection }: { detection: DetectionResult }) {
   )
 }
 
+function DetectionColumn({
+  source,
+  detections,
+}: {
+  source: "direct" | "semantic"
+  detections: DetectionResult[]
+}) {
+  const style = SOURCE_COLORS[source]
+  return (
+    <div className="flex min-h-0 flex-col">
+      <div className="sticky top-0 z-10 flex items-center gap-1.5 border-b border-border bg-card px-3 py-1.5">
+        <span
+          className={cn(
+            "text-[0.5625rem] font-medium uppercase tracking-wider",
+            style.text
+          )}
+        >
+          {style.label}
+        </span>
+        <span className="text-[0.5625rem] text-muted-foreground">
+          {detections.length}
+        </span>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {detections.length === 0 ? (
+          <p className="p-4 text-center text-xs text-muted-foreground">
+            No {style.label.toLowerCase()} detections yet
+          </p>
+        ) : (
+          detections.map((detection, i) => (
+            <DetectionCard key={`${detection.verse_ref}-${i}`} detection={detection} />
+          ))
+        )}
+      </div>
+    </div>
+  )
+}
+
 export function DetectionsPanel() {
   const { detections } = useDetection()
+
+  // Latency debugging: when the list changes, mark the React commit and the
+  // next animation frame (≈ actual pixels on screen).
+  useEffect(() => {
+    if (detections.length === 0) return
+    mark(
+      `detections-commit n=${detections.length} first=${detections[0]?.verse_ref ?? ""} src=${detections[0]?.source ?? "?"}`
+    )
+    const raf = requestAnimationFrame(() => mark("detections-paint"))
+    return () => cancelAnimationFrame(raf)
+  }, [detections])
+
+  // Issue #104: direct (spoken references) and semantic (quoted text)
+  // detections in separate columns, so a burst of direct hits doesn't push
+  // the semantic ones out of view.
+  const directDetections = useMemo(
+    () => detections.filter((d) => d.source === "direct"),
+    [detections]
+  )
+  const semanticDetections = useMemo(
+    () => detections.filter((d) => d.source !== "direct"),
+    [detections]
+  )
 
   return (
     <div
@@ -126,18 +184,16 @@ export function DetectionsPanel() {
         </button>
       </PanelHeader>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="flex flex-col gap-0">
-          {detections.length === 0 && (
-            <p className="p-4 text-center text-xs text-muted-foreground">
-              Verse detections will appear here during transcription
-            </p>
-          )}
-          {detections.map((detection, i) => (
-            <DetectionCard key={`${detection.verse_ref}-${i}`} detection={detection} />
-          ))}
+      {detections.length === 0 ? (
+        <p className="p-4 text-center text-xs text-muted-foreground">
+          Verse detections will appear here during transcription
+        </p>
+      ) : (
+        <div className="grid min-h-0 flex-1 grid-cols-2 divide-x divide-border">
+          <DetectionColumn source="direct" detections={directDetections} />
+          <DetectionColumn source="semantic" detections={semanticDetections} />
         </div>
-      </div>
+      )}
     </div>
   )
 }

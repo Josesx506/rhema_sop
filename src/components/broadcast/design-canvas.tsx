@@ -1,7 +1,13 @@
 import { useEffect, useRef, useState, useCallback } from "react"
 import * as fabric from "fabric"
 import { useBroadcastStore } from "@/stores"
-import { renderVerse } from "@/lib/verse-renderer"
+import {
+  onThemeFontsLoaded,
+  renderVerse,
+  type VerseLayoutMetrics,
+} from "@/lib/verse-renderer"
+import { seedFreeBoxesFromMetrics, SAMPLE_VERSE } from "@/lib/theme-migrations"
+import { preloadThemeImages, themeImageCache } from "@/lib/theme-image-cache"
 import { Button } from "@/components/ui/button"
 import {
   SearchIcon,
@@ -11,14 +17,10 @@ import {
   Grid3X3Icon,
   MaximizeIcon,
 } from "lucide-react"
-import type { BroadcastTheme, VerseRenderData } from "@/types"
+import type { BroadcastTheme } from "@/types"
 
 const WS_WIDTH = 1920
 const WS_HEIGHT = 1080
-const DESIGNER_SAMPLE_VERSE: VerseRenderData = {
-  reference: "Genesis 1:1 (KJV)",
-  segments: [{ verseNumber: 1, text: "In the beginning God created the heaven and the earth." }],
-}
 
 export function DesignCanvas() {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -26,13 +28,13 @@ export function DesignCanvas() {
   const fabricRef = useRef<fabric.Canvas | null>(null)
   const latestThemeRef = useRef<BroadcastTheme | null>(null)
   const rafIdRef = useRef<number | null>(null)
-  const imageCacheRef = useRef<Map<string, HTMLImageElement>>(new Map())
-  const imageRequestsRef = useRef<Map<string, Promise<HTMLImageElement>>>(new Map())
   const objectsRef = useRef<{
     workspace: fabric.Rect | null
     referenceRegion: fabric.Rect | null
     verseRegion: fabric.Rect | null
   }>({ workspace: null, referenceRegion: null, verseRegion: null })
+  const draggingRef = useRef<"reference" | "verse" | null>(null)
+  const latestMetricsRef = useRef<VerseLayoutMetrics | null>(null)
 
   const draftTheme = useBroadcastStore((s) => s.draftTheme)
   const editingThemeId = useBroadcastStore((s) => s.editingThemeId)
@@ -47,8 +49,9 @@ export function DesignCanvas() {
       latestTheme,
       objectsRef,
       canvas,
-      imageCacheRef.current,
-      imageRequestsRef.current
+      undefined,
+      latestMetricsRef,
+      draggingRef.current
     )
   }, [])
 
@@ -110,7 +113,9 @@ export function DesignCanvas() {
     canvas.add(workspace)
     canvas.centerObject(workspace)
     workspace.setCoords()
-    canvas.clipPath = workspace
+    // Never assign the workspace itself as canvas.clipPath: Fabric shares one
+    // cache canvas per object, so the clip pass would mask the whole canvas
+    // with the theme bitmap's alpha (blanking transparent themes during drag).
     objectsRef.current.workspace = workspace
 
     const refRegion = new fabric.Rect({
@@ -126,8 +131,8 @@ export function DesignCanvas() {
       hasBorders: true,
       borderColor: "#f59e0b",
       borderDashArray: [6, 3],
-      lockMovementX: true,
-      lockMovementY: true,
+      lockMovementX: false,
+      lockMovementY: false,
       evented: true,
       objectCaching: false,
     })
@@ -147,8 +152,8 @@ export function DesignCanvas() {
       hasBorders: true,
       borderColor: "#f59e0b",
       borderDashArray: [6, 3],
-      lockMovementX: true,
-      lockMovementY: true,
+      lockMovementX: false,
+      lockMovementY: false,
       evented: true,
       objectCaching: false,
     })
@@ -176,6 +181,65 @@ export function DesignCanvas() {
       useBroadcastStore.getState().setSelectedElement(null)
     })
 
+    // Drag-to-position: moving a region writes its box back to the draft
+    // theme. Dragging while in stacked mode detaches into free mode first,
+    // seeding boxes from the current stacked layout so nothing jumps.
+    const regionForObject = (obj: fabric.Object | undefined) =>
+      obj === objectsRef.current.referenceRegion
+        ? ("reference" as const)
+        : obj === objectsRef.current.verseRegion
+          ? ("verse" as const)
+          : null
+
+    canvas.on("object:moving", (e) => {
+      const region = regionForObject(e.target)
+      if (!region) return
+      draggingRef.current = region
+
+      const store = useBroadcastStore.getState()
+      let theme = store.draftTheme
+      if (!theme) return
+      if (
+        theme.layout.mode !== "free" ||
+        !theme.layout.referenceBox ||
+        !theme.layout.verseBox
+      ) {
+        const metrics = latestMetricsRef.current
+        const seeded = metrics
+          ? seedFreeBoxesFromMetrics(metrics, theme.resolution)
+          : null
+        if (!seeded) return
+        store.updateDraft({ layout: { ...theme.layout, mode: "free", ...seeded } })
+        theme = useBroadcastStore.getState().draftTheme
+        if (!theme) return
+      }
+
+      const ws = objectsRef.current.workspace
+      const obj = e.target
+      if (!ws || !obj) return
+      const wsTopLeft = ws.getPointByOrigin("left", "top")
+      const key = region === "reference" ? "referenceBox" : "verseBox"
+      const box = theme.layout[key]
+      if (!box) return
+      const widthPx = (box.width / 100) * WS_WIDTH
+      const heightPx = (box.height / 100) * WS_HEIGHT
+      const localX = clamp(obj.left - wsTopLeft.x, 0, Math.max(0, WS_WIDTH - widthPx))
+      const localY = clamp(obj.top - wsTopLeft.y, 0, Math.max(0, WS_HEIGHT - heightPx))
+      store.updateDraftNested(`layout.${key}`, {
+        ...box,
+        x: Math.round((localX / WS_WIDTH) * 10000) / 100,
+        y: Math.round((localY / WS_HEIGHT) * 10000) / 100,
+      })
+    })
+
+    const endDrag = () => {
+      if (!draggingRef.current) return
+      draggingRef.current = null
+      resyncLatestTheme()
+    }
+    canvas.on("object:modified", endDrag)
+    canvas.on("mouse:up", endDrag)
+
     fabricRef.current = canvas
 
     // Auto-zoom after a tick (canvas needs to be in DOM)
@@ -187,7 +251,12 @@ export function DesignCanvas() {
     const observer = new ResizeObserver(() => autoZoom())
     observer.observe(containerRef.current)
 
+    // Re-render once theme webfonts load — text measured against fallback
+    // fonts before that would leave the bitmap and hit rects off.
+    const unsubscribeFonts = onThemeFontsLoaded(() => resyncLatestTheme())
+
     return () => {
+      unsubscribeFonts()
       observer.disconnect()
       if (rafIdRef.current) cancelAnimationFrame(rafIdRef.current)
       rafIdRef.current = null
@@ -195,7 +264,7 @@ export function DesignCanvas() {
       fabricRef.current = null
       objectsRef.current = { workspace: null, referenceRegion: null, verseRegion: null }
     }
-  }, [editingThemeId, autoZoom])
+  }, [editingThemeId, autoZoom, resyncLatestTheme])
 
   // Sync draft theme to the existing Fabric objects (throttled to 1 per frame)
   useEffect(() => {
@@ -213,8 +282,6 @@ export function DesignCanvas() {
         latest,
         objectsRef,
         latestCanvas,
-        imageCacheRef.current,
-        imageRequestsRef.current,
         () => {
           const current = latestThemeRef.current
           const currentCanvas = fabricRef.current
@@ -223,10 +290,13 @@ export function DesignCanvas() {
             current,
             objectsRef,
             currentCanvas,
-            imageCacheRef.current,
-            imageRequestsRef.current
+            undefined,
+            latestMetricsRef,
+            draggingRef.current
           )
-        }
+        },
+        latestMetricsRef,
+        draggingRef.current
       )
     })
   }, [draftTheme])
@@ -333,40 +403,19 @@ async function syncThemeToCanvas(
     verseRegion: fabric.Rect | null
   }>,
   canvas: fabric.Canvas,
-  imageCache: Map<string, HTMLImageElement>,
-  imageRequests: Map<string, Promise<HTMLImageElement>>,
-  onImageReady?: () => void
+  onImageReady?: () => void,
+  metricsRef?: React.MutableRefObject<VerseLayoutMetrics | null>,
+  dragging?: "reference" | "verse" | null
 ) {
   const ws = objectsRef.current.workspace
   const refRegion = objectsRef.current.referenceRegion
   const verseRegion = objectsRef.current.verseRegion
   if (!ws || !refRegion || !verseRegion) return
 
-  if (theme.background.type === "image" && theme.background.image?.url) {
-    const img = imageCache.get(theme.background.image.url)
-    if (!img) {
-      ensureImage(
-        theme.background.image.url,
-        imageCache,
-        imageRequests,
-        onImageReady
-      )
-    }
-  }
+  // Covers the frame background and every surface fill.
+  preloadThemeImages(theme, onImageReady)
 
-  if (theme.logoOverlay.enabled && theme.logoOverlay.image?.url) {
-    const logoImg = imageCache.get(theme.logoOverlay.image.url)
-    if (!logoImg) {
-      ensureImage(
-        theme.logoOverlay.image.url,
-        imageCache,
-        imageRequests,
-        onImageReady
-      )
-    }
-  }
-
-  const { bitmap, metrics } = renderThemeBitmap(theme, imageCache)
+  const { bitmap, metrics } = renderThemeBitmap(theme)
   ws.set({
     fill: new fabric.Pattern({
       source: bitmap,
@@ -375,38 +424,55 @@ async function syncThemeToCanvas(
   })
 
   if (!metrics) return
+  if (metricsRef) metricsRef.current = metrics
   const referenceRect = metrics.referenceRect
   const verseRect = metrics.verseRect
   if (!referenceRect || !verseRect) return
 
   ws.setCoords()
   const wsTopLeft = ws.getPointByOrigin("left", "top")
-  const tightenedRects = tightenTextHitRects(referenceRect, verseRect, theme)
-  const mappedReferenceRect = mapLocalRectToWorkspaceRect(tightenedRects.referenceRect, wsTopLeft)
-  const mappedVerseRect = mapLocalRectToWorkspaceRect(tightenedRects.verseRect, wsTopLeft)
+  // In free mode the regions ARE the layout boxes, so map them 1:1 for an
+  // exact drag round-trip. In stacked mode the renderer's element rects
+  // already wrap the drawn text.
+  const freeMode =
+    theme.layout.mode === "free" &&
+    metrics.referenceBoxRect &&
+    metrics.verseBoxRect
+  const hitRects = freeMode
+    ? {
+        referenceRect: metrics.referenceBoxRect!,
+        verseRect: metrics.verseBoxRect!,
+      }
+    : { referenceRect, verseRect }
+  const mappedReferenceRect = mapLocalRectToWorkspaceRect(hitRects.referenceRect, wsTopLeft)
+  const mappedVerseRect = mapLocalRectToWorkspaceRect(hitRects.verseRect, wsTopLeft)
 
-  refRegion.set({
-    originX: "left",
-    originY: "top",
-    width: Math.max(24, mappedReferenceRect.width),
-    height: Math.max(20, mappedReferenceRect.height),
-  })
-  refRegion.setPositionByOrigin(
-    new fabric.Point(mappedReferenceRect.x, mappedReferenceRect.y),
-    "left",
-    "top"
-  )
-  verseRegion.set({
-    originX: "left",
-    originY: "top",
-    width: Math.max(24, mappedVerseRect.width),
-    height: Math.max(24, mappedVerseRect.height),
-  })
-  verseRegion.setPositionByOrigin(
-    new fabric.Point(mappedVerseRect.x, mappedVerseRect.y),
-    "left",
-    "top"
-  )
+  if (dragging !== "reference") {
+    refRegion.set({
+      originX: "left",
+      originY: "top",
+      width: Math.max(24, mappedReferenceRect.width),
+      height: Math.max(20, mappedReferenceRect.height),
+    })
+    refRegion.setPositionByOrigin(
+      new fabric.Point(mappedReferenceRect.x, mappedReferenceRect.y),
+      "left",
+      "top"
+    )
+  }
+  if (dragging !== "verse") {
+    verseRegion.set({
+      originX: "left",
+      originY: "top",
+      width: Math.max(24, mappedVerseRect.width),
+      height: Math.max(24, mappedVerseRect.height),
+    })
+    verseRegion.setPositionByOrigin(
+      new fabric.Point(mappedVerseRect.x, mappedVerseRect.y),
+      "left",
+      "top"
+    )
+  }
   canvas.bringObjectToFront(verseRegion)
   canvas.bringObjectToFront(refRegion)
 
@@ -436,86 +502,30 @@ function mapLocalRectToWorkspaceRect(
   }
 }
 
-function tightenTextHitRects(
-  referenceRect: { x: number; y: number; width: number; height: number },
-  verseRect: { x: number; y: number; width: number; height: number },
-  theme: BroadcastTheme
-) {
-  const refFont = Math.max(1, theme.reference.fontSize)
-  const verseFont = Math.max(1, theme.verseText.fontSize)
-  const verseExtraLeading = Math.max(0, theme.verseText.lineHeight - 1) * verseFont
-  const referenceGap = Math.max(0, theme.layout.referenceGap ?? 0)
-  const refPadX = Math.max(6, refFont * 0.25)
-  const refPadTop = Math.max(2, refFont * 0.2)
-  const refPadBottom = Math.max(0, refFont * 0)
-
-  // Renderer rects include spacing blocks; trim to closer glyph hit areas for designer selection.
-  const referenceTight = {
-    x: referenceRect.x - refPadX,
-    y: referenceRect.y + refFont * 0.22 - refPadTop,
-    width: referenceRect.width + refPadX * 2,
-    height: Math.max(refFont * 1.05, referenceRect.height - refFont * 0.42) + refPadTop + refPadBottom,
-  }
-  const verseTight = {
-    x: verseRect.x,
-    y: verseRect.y + verseFont * 0.12,
-    width: verseRect.width,
-    height: Math.max(verseFont, verseRect.height - verseExtraLeading - verseFont * 0.1),
-  }
-
-  if (theme.reference.position === "above") {
-    const minVerseY = referenceTight.y + referenceTight.height + referenceGap
-    verseTight.y = Math.max(verseTight.y, minVerseY)
-  } else if (theme.reference.position === "below") {
-    const minRefY = verseTight.y + verseTight.height + referenceGap
-    referenceTight.y = Math.max(referenceTight.y, minRefY)
-  }
-
-  return {
-    referenceRect: referenceTight,
-    verseRect: verseTight,
-  }
-}
-
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value))
 }
 
-function ensureImage(
-  url: string,
-  cache: Map<string, HTMLImageElement>,
-  pending: Map<string, Promise<HTMLImageElement>>,
-  onReady?: () => void
-) {
-  if (cache.has(url) || pending.has(url)) return
-  const request = loadImage(url)
-    .then((img) => {
-      cache.set(url, img)
-      onReady?.()
-      return img
-    })
-    .catch((error) => {
-      console.warn("[theme-designer] failed to load background image", { url: url.slice(0, 100), error })
-      throw error
-    })
-    .finally(() => {
-      pending.delete(url)
-    })
-  pending.set(url, request)
-}
-
-function loadImage(url: string): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const img = new Image()
-    img.onload = () => resolve(img)
-    img.onerror = () => reject(new Error(`Failed to load image: ${url}`))
-    img.src = url
-  })
+/** Editor-only checkerboard so transparent backgrounds read as such (output stays truly transparent). */
+function drawTransparencyCheckerboard(ctx: CanvasRenderingContext2D): void {
+  const size = 40
+  ctx.save()
+  // Paint only behind already-rendered content: the theme render clears
+  // transparent regions, so fill them from underneath.
+  ctx.globalCompositeOperation = "destination-over"
+  ctx.fillStyle = "#2c2c30"
+  for (let y = 0; y < WS_HEIGHT; y += size) {
+    for (let x = (y / size) % 2 === 0 ? 0 : size; x < WS_WIDTH; x += size * 2) {
+      ctx.fillRect(x, y, size, size)
+    }
+  }
+  ctx.fillStyle = "#232326"
+  ctx.fillRect(0, 0, WS_WIDTH, WS_HEIGHT)
+  ctx.restore()
 }
 
 function renderThemeBitmap(
   theme: BroadcastTheme,
-  imageCache: Map<string, HTMLImageElement>
 ): { bitmap: HTMLCanvasElement; metrics: ReturnType<typeof renderVerse> } {
   const offscreen = document.createElement("canvas")
   offscreen.width = WS_WIDTH
@@ -523,6 +533,11 @@ function renderThemeBitmap(
   const ctx = offscreen.getContext("2d")
   if (!ctx) return { bitmap: offscreen, metrics: null }
 
-  const metrics = renderVerse(ctx, theme, DESIGNER_SAMPLE_VERSE, { imageCache })
+  const metrics = renderVerse(ctx, theme, SAMPLE_VERSE, {
+    imageCache: themeImageCache(),
+  })
+  if (theme.background.type === "transparent") {
+    drawTransparencyCheckerboard(ctx)
+  }
   return { bitmap: offscreen, metrics }
 }

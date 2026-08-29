@@ -5,16 +5,83 @@ mod state;
 
 use std::sync::Mutex;
 
+/// Roll the log at 5 MB and keep ten archives — about 50 MB, which covers a
+/// full service at the ~1-2 KB/s the transcription path produces.
+const LOG_MAX_FILE_SIZE: u128 = 5_000_000;
+const LOG_ARCHIVE_COUNT: usize = 10;
+
+/// Route panics through `log` so they reach the log file.
+///
+/// Without this a panic only reaches stderr, which is discarded in a bundled
+/// app — so the single most useful thing a crash report could contain was the
+/// one thing missing from it.
+fn install_panic_hook() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let location = info
+            .location()
+            .map_or_else(|| "unknown location".to_string(), ToString::to_string);
+        log::error!("[PANIC] at {location}: {info}");
+        previous(info);
+    }));
+}
+
 #[expect(clippy::too_many_lines, reason = "app setup is inherently complex")]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Load .env file — try src-tauri/.env first, then project root ../.env
     dotenvy::dotenv().ok();
     dotenvy::from_filename("../.env").ok();
+    install_panic_hook();
     tauri::Builder::default()
         .plugin(
             tauri_plugin_log::Builder::new()
                 .level(tauri_plugin_log::log::LevelFilter::Info)
+                // Memory sampling is for leak-hunting, not bug reports. Keep it
+                // on stdout in dev but out of the file users send us.
+                .level_for("rhema_lib::memstats", tauri_plugin_log::log::LevelFilter::Warn)
+                // ONNX Runtime logs one line per tensor allocation while
+                // loading the embedder ("Reserving memory in BFCArena for Cpu
+                // size: N"). That was 93% of the very first real export — 670 KB
+                // of allocator trace burying 46 KB of signal. Warnings and
+                // errors from it still come through.
+                .level_for("ort", tauri_plugin_log::log::LevelFilter::Warn)
+                .targets([
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                        file_name: Some("rhema".into()),
+                    }),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Webview),
+                ])
+                // The stock 40 KB / KeepOne default *deletes* the previous file,
+                // which left well under an hour of history — useless for
+                // diagnosing a service that went wrong. Roll at 5 MB and keep
+                // ten archives (~50 MB) so a whole service stays exportable.
+                .max_file_size(LOG_MAX_FILE_SIZE)
+                .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(
+                    LOG_ARCHIVE_COUNT,
+                ))
+                // Our own formatter rather than `.timezone_strategy()`, which
+                // installs one that also swaps the field order. Milliseconds
+                // matter: the [LAT] marks measure detection latency, and whole
+                // seconds throw that away. Times are UTC so reports from
+                // different machines line up.
+                .format(|out, message, record| {
+                    let now = tauri_plugin_log::TimezoneStrategy::UseUtc.get_now();
+                    out.finish(format_args!(
+                        "[{:04}-{:02}-{:02}][{:02}:{:02}:{:02}.{:03}][{}][{}] {}",
+                        now.year(),
+                        u8::from(now.month()),
+                        now.day(),
+                        now.hour(),
+                        now.minute(),
+                        now.second(),
+                        now.millisecond(),
+                        record.target(),
+                        record.level(),
+                        message
+                    ));
+                })
                 .build(),
         )
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
@@ -39,13 +106,16 @@ pub fn run() {
             commands::bible::get_cross_references,
             commands::bible::get_active_translation,
             commands::bible::set_active_translation,
+            commands::diagnostics::export_diagnostics,
             commands::detection::detect_verses,
             commands::detection::detection_status,
+            commands::detection::ui_mark,
             commands::detection::semantic_search,
-            commands::detection::toggle_paraphrase_detection,
             commands::detection::reading_mode_status,
             commands::detection::stop_reading_mode,
             commands::audio::get_audio_devices,
+            commands::audio::start_audio_test,
+            commands::audio::stop_audio_test,
             commands::stt::start_transcription,
             commands::stt::stop_transcription,
             commands::broadcast::list_monitors,
@@ -56,6 +126,7 @@ pub fn run() {
             commands::broadcast::stop_ndi,
             commands::broadcast::get_ndi_status,
             commands::broadcast::push_ndi_frame,
+            commands::fonts::list_system_fonts,
             commands::remote::start_osc,
             commands::remote::stop_osc,
             commands::remote::get_osc_status,
@@ -68,6 +139,14 @@ pub fn run() {
             use tauri::Manager;
 
             memstats::spawn();
+
+            // Point the NDI runtime at the bundled resource dir (production).
+            // The source-checkout path stays as a fallback inside the crate.
+            if let Ok(resource_dir) = app.path().resource_dir() {
+                let managed_ndi = app.state::<Mutex<rhema_broadcast::ndi::NdiRuntime>>();
+                let mut ndi = managed_ndi.lock().unwrap();
+                ndi.set_library_search_dirs(vec![resource_dir]);
+            }
 
             // Try resource dir first (production), then dev fallback
             let db_path = app
@@ -129,19 +208,35 @@ pub fn run() {
                             match rhema_detection::HnswVectorIndex::load(&embeddings_path, &ids_path, dim) {
                                 Ok(index) => {
                                     log::info!("Verse embeddings loaded ({} vectors)", index.len());
+                                    if let Some(warning) =
+                                        check_embedding_provenance(&embeddings_path, &model_path)
+                                    {
+                                        // Surface in the UI (warning banner via detection_status).
+                                        set_embedding_warning(app.handle(), warning);
+                                    }
                                     pipeline.set_semantic(
                                         rhema_detection::SemanticDetector::new(
                                             Box::new(embedder),
                                             Box::new(index),
                                         ),
                                     );
+                                    drop(pipeline);
+                                    // The sidecar can be missing (indexes built before it
+                                    // existed) or wrong — verify EMPIRICALLY in the
+                                    // background: a matched index finds a verse's own text
+                                    // at ~1.0 similarity; the historical mismatched index
+                                    // scored ~0.65. One ONNX embed, off the startup path.
+                                    spawn_embedding_self_check(app.handle().clone());
                                 }
                                 Err(e) => {
                                     log::warn!("Failed to load verse embeddings: {e}");
                                 }
                             }
                         } else {
-                            log::info!("No pre-computed verse embeddings found. Run 'bun run export:verses' then the precompute binary.");
+                            log::info!(
+                                "Embedding re-ranking not installed (optional) — keyword + reference \
+                                 search fully functional. Opt in with 'bun run setup:all --with-embedding'."
+                            );
                         }
                     }
                     Err(e) => {
@@ -149,11 +244,131 @@ pub fn run() {
                     }
                 }
             } else {
-                log::info!("ONNX model not found. Semantic search disabled. Run 'bun run download:model' to download.");
+                log::info!(
+                    "Embedding re-ranking not installed (optional) — keyword + reference \
+                     search fully functional. Opt in with 'bun run setup:all --with-embedding'."
+                );
             }
 
             Ok(())
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// Store an embedding warning in `AppState` (read by `detection_status`)
+/// and push it to the webview so the banner appears without a reload.
+fn set_embedding_warning(app: &tauri::AppHandle, warning: String) {
+    use tauri::{Emitter, Manager};
+    let managed_state = app.state::<Mutex<state::AppState>>();
+    managed_state.lock().unwrap().embedding_warning = Some(warning.clone());
+    let _ = app.emit("embedding_warning", warning);
+}
+
+/// Empirical index verification, run in the background after startup.
+///
+/// Embeds one known verse's exact KJV text and asks the index for its
+/// nearest neighbour. A healthy index returns that same verse at ~1.0
+/// cosine; the historical mismatched index (built with a different
+/// model/pooling) scored ~0.65. This needs no provenance sidecar, so it
+/// catches the most common broken state in the wild: an old index with no
+/// `meta.json` at all.
+fn spawn_embedding_self_check(app: tauri::AppHandle) {
+    use tauri::Manager;
+    tauri::async_runtime::spawn(async move {
+        let _ = tokio::task::spawn_blocking(move || {
+            // John 3:16 KJV — present in every index build.
+            let (verse_id, verse_text) = {
+                let managed_state = app.state::<Mutex<state::AppState>>();
+                let app_state = managed_state.lock().unwrap();
+                let Some(db) = app_state.bible_db.as_ref() else { return };
+                match db.get_verse(1, 43, 3, 16) {
+                    Ok(Some(v)) => (v.id, v.text),
+                    _ => return,
+                }
+            };
+
+            let top_hit = {
+                let managed_pipeline =
+                    app.state::<Mutex<rhema_detection::DetectionPipeline>>();
+                let mut pipeline = managed_pipeline.lock().unwrap();
+                if !pipeline.has_semantic() {
+                    return;
+                }
+                pipeline.semantic_search(&verse_text, 1).into_iter().next()
+            };
+
+            match top_hit {
+                Some((id, similarity)) if id == verse_id && similarity >= 0.98 => {
+                    log::info!(
+                        "Embedding index self-check OK (self-similarity {similarity:.4})"
+                    );
+                }
+                other => {
+                    let observed = other.map_or_else(
+                        || "no result".to_string(),
+                        |(id, sim)| format!("verse_id {id} at {sim:.2}"),
+                    );
+                    let warning = format!(
+                        "Semantic search index failed verification: a test verse should \
+                         match its own embedding at ~1.0 similarity but returned {observed}. \
+                         The index was built with a different model than the app is running, \
+                         so semantic results will be unreliable. Fix: delete \
+                         embeddings/kjv-qwen3-0.6b* and run `bun run setup:all --with-embedding`."
+                    );
+                    log::warn!("{warning}");
+                    set_embedding_warning(&app, warning);
+                }
+            }
+        })
+        .await;
+    });
+}
+
+/// Compare the embeddings' provenance sidecar (written by the precompute
+/// bin) against the ONNX model actually loaded. A mismatched index silently
+/// wrecks vector-search accuracy — the shipped pre-2025 index scored
+/// cosine ~0.65 against its own verses because it was built with a
+/// different model/prefix than the runtime.
+///
+/// Returns a user-facing warning message when the index provably mismatches
+/// the loaded model (surfaced as a UI banner); `None` otherwise.
+fn check_embedding_provenance(
+    embeddings_path: &std::path::Path,
+    model_path: &std::path::Path,
+) -> Option<String> {
+    let meta_path = embeddings_path.with_extension("meta.json");
+    // Missing/unreadable sidecar is informational only (e.g. assets built
+    // before the sidecar existed). The loud warning is reserved for the one
+    // real hazard: an index provably built with a DIFFERENT model.
+    let Ok(raw) = std::fs::read_to_string(&meta_path) else {
+        log::info!(
+            "No embeddings provenance sidecar at {} — cannot verify the index matches the model. \
+             Regenerating refreshes it: 'bun run setup:all --with-embedding'.",
+            meta_path.display()
+        );
+        return None;
+    };
+    let Ok(meta) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        log::info!("Unreadable embeddings provenance sidecar at {}", meta_path.display());
+        return None;
+    };
+    let index_model = meta.get("model_file").and_then(|v| v.as_str()).unwrap_or("");
+    let loaded_model = model_path
+        .file_name()
+        .map(|f| f.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if index_model == loaded_model {
+        log::info!("Embeddings provenance OK (model: {loaded_model})");
+        None
+    } else {
+        let warning = format!(
+            "Semantic search index mismatch: the verse embeddings were built with \
+             \"{index_model}\" but the app loaded \"{loaded_model}\", so semantic results \
+             will be unreliable. Fix: delete embeddings/kjv-qwen3-0.6b* and run \
+             `bun run setup:all --with-embedding`."
+        );
+        log::warn!("{warning}");
+        Some(warning)
+    }
 }

@@ -1,23 +1,17 @@
 #![expect(clippy::needless_pass_by_value, reason = "Tauri command extractors require pass-by-value")]
 
-use std::collections::HashSet;
 use std::sync::Mutex;
 
 use serde::Serialize;
 use tauri::State;
 
+use rhema_detection::fusion::{
+    fuse_rrf, FtsCandidate, VerseKey, FTS5_CONFIDENCE_DECAY, FTS5_MIN_CONFIDENCE,
+    FTS5_RANK0_CONFIDENCE,
+};
 use rhema_detection::{DetectionPipeline, MergedDetection, ReadingMode};
 
 use crate::state::AppState;
-
-/// Confidence assigned to the best FTS5 BM25 match (rank 0) in context search.
-pub(crate) const FTS5_RANK0_CONFIDENCE: f64 = 0.75;
-
-/// Confidence decrease per FTS5 rank position.
-pub(crate) const FTS5_CONFIDENCE_DECAY: f64 = 0.04;
-
-/// FTS5 results below this confidence are not included.
-pub(crate) const FTS5_MIN_CONFIDENCE: f64 = 0.50;
 
 /// Serializable detection result for the frontend
 #[derive(Clone, Serialize)]
@@ -111,39 +105,46 @@ pub fn detect_verses(
     Ok(results)
 }
 
+/// Frontend latency mark — logs a webview-side timestamp into the unified
+/// backend log so `[LAT]` timelines can be read from one file. `epoch_ms`
+/// is the webview's `Date.now()`; same machine, same clock as the backend's
+/// marks.
+#[tauri::command]
+pub fn ui_mark(label: String, epoch_ms: f64) {
+    log::info!("[LAT] ui {label} t={epoch_ms:.0}");
+}
+
 /// Check if semantic search is available
 #[tauri::command]
 pub fn detection_status(
+    state: State<'_, Mutex<AppState>>,
     pipeline_state: State<'_, Mutex<DetectionPipeline>>,
 ) -> Result<DetectionStatusResult, String> {
-    let pipeline = pipeline_state.lock().map_err(|e| e.to_string())?;
+    let has_semantic = {
+        let pipeline = pipeline_state.lock().map_err(|e| e.to_string())?;
+        pipeline.has_semantic()
+    };
+    let embedding_warning = {
+        let app_state = state.lock().map_err(|e| e.to_string())?;
+        app_state.embedding_warning.clone()
+    };
     Ok(DetectionStatusResult {
         has_direct: true,
-        has_semantic: pipeline.has_semantic(),
-        paraphrase_enabled: pipeline.use_synonyms(),
+        has_semantic,
+        embedding_warning,
     })
-}
-
-/// Toggle paraphrase detection (synonym expansion) on/off
-#[tauri::command]
-pub fn toggle_paraphrase_detection(
-    pipeline_state: State<'_, Mutex<DetectionPipeline>>,
-    enabled: bool,
-) -> Result<bool, String> {
-    let mut pipeline = pipeline_state.lock().map_err(|e| e.to_string())?;
-    pipeline.set_use_synonyms(enabled);
-    log::info!("[DET] Paraphrase detection (synonyms) set to: {enabled}");
-    Ok(enabled)
 }
 
 #[derive(Serialize)]
 pub struct DetectionStatusResult {
     pub has_direct: bool,
     pub has_semantic: bool,
-    pub paraphrase_enabled: bool,
+    /// Set when the embedding index provably mismatches the loaded model —
+    /// the UI shows this as a warning banner.
+    pub embedding_warning: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct SemanticSearchResult {
     pub verse_ref: String,
     pub verse_text: String,
@@ -152,6 +153,8 @@ pub struct SemanticSearchResult {
     pub chapter: i32,
     pub verse: i32,
     pub similarity: f64,
+    /// Which engines found this verse: "semantic", "keyword", or both.
+    pub sources: Vec<String>,
 }
 
 #[tauri::command]
@@ -161,78 +164,105 @@ pub fn semantic_search(
     query: String,
     limit: Option<usize>,
 ) -> Result<Vec<SemanticSearchResult>, String> {
+    // ONNX inference pages the whole quantized model into memory — log every
+    // invocation so RSS spikes and CPU stalls can be correlated with a caller.
+    log::info!(
+        "[LAT] semantic_search invoked t={} query_len={}",
+        super::stt::epoch_ms(),
+        query.len()
+    );
     let k = limit.unwrap_or(10);
+    // Fetch deeper candidate lists than the display limit: RRF rewards
+    // agreement between engines, so both lists need enough depth for the
+    // overlap to surface.
+    let depth = (3 * k).max(30);
 
-    // Lock pipeline for vector search (may be slow if ONNX runs)
+    // Lock pipeline for vector search (may be slow if ONNX runs). The
+    // embedding model is OPTIONAL: without it the detector is a stub that
+    // returns no vector hits, and the search below degrades to FTS5 with
+    // phrase-priority ordering — full-quality keyword + reference search
+    // with zero model assets installed.
     let vector_results = {
         let mut pipeline = pipeline_state.lock().map_err(|e| e.to_string())?;
-        if !pipeline.has_semantic() {
-            return Err("Semantic search not available — model or embeddings not loaded".into());
-        }
-        pipeline.semantic_search(&query, k)
+        pipeline.semantic_search(&query, depth)
     }; // Pipeline lock dropped
 
     // Lock AppState for DB lookups only (fast)
     let app_state = state.lock().map_err(|e| e.to_string())?;
 
-    let mut results: Vec<SemanticSearchResult> = vector_results
+    let vector_hits: Vec<(VerseKey, f64)> = vector_results
         .into_iter()
         .filter_map(|(verse_id, similarity)| {
-            if let Some(ref db) = app_state.bible_db {
-                if let Ok(Some(v)) = db.get_verse_by_id(verse_id) {
-                    return Some(SemanticSearchResult {
-                        verse_ref: format!("{} {}:{}", v.book_name, v.chapter, v.verse),
-                        verse_text: v.text,
-                        book_name: v.book_name,
-                        book_number: v.book_number,
-                        chapter: v.chapter,
-                        verse: v.verse,
-                        similarity,
-                    });
-                }
-            }
-            None
+            let db = app_state.bible_db.as_ref()?;
+            let v = db.get_verse_by_id(verse_id).ok().flatten()?;
+            Some((
+                VerseKey { book_number: v.book_number, chapter: v.chapter, verse: v.verse },
+                similarity,
+            ))
         })
         .collect();
 
-    // FTS5 BM25 across all English translations — resolve to active translation
-    if let Some(ref db) = app_state.bible_db {
-        let fts_results = db.search_verses_bm25(&query, k).unwrap_or_default();
-        let seen: HashSet<(i32, i32, i32)> = results
-            .iter()
-            .map(|r| (r.book_number, r.chapter, r.verse))
-            .collect();
+    // FTS5 BM25 across all English translations
+    let fts_candidates: Vec<FtsCandidate> = app_state
+        .bible_db
+        .as_ref()
+        .and_then(|db| db.search_verses_bm25(&query, depth).ok())
+        .unwrap_or_default()
+        .iter()
+        .map(|f| {
+            (
+                VerseKey { book_number: f.book_number, chapter: f.chapter, verse: f.verse },
+                f.phrase_match,
+            )
+        })
+        .collect();
 
-        for (rank, fts) in fts_results.iter().enumerate() {
-            if !seen.contains(&(fts.book_number, fts.chapter, fts.verse)) {
-                #[expect(clippy::cast_precision_loss, reason = "rank is small")]
-                let similarity = FTS5_RANK0_CONFIDENCE - (rank as f64 * FTS5_CONFIDENCE_DECAY);
-                if similarity < FTS5_MIN_CONFIDENCE {
-                    break;
-                }
-                // Resolve to active translation text
-                if let Ok(Some(v)) = db.get_verse(
+    // Rank with verbatim-first fusion, then resolve each hit to the active
+    // translation's text.
+    #[expect(clippy::cast_precision_loss, reason = "rank is small")]
+    let results: Vec<SemanticSearchResult> = fuse_rrf(&vector_hits, &fts_candidates, k)
+        .into_iter()
+        .enumerate()
+        .filter_map(|(fts_rank, hit)| {
+            let db = app_state.bible_db.as_ref()?;
+            let v = db
+                .get_verse(
                     app_state.active_translation_id,
-                    fts.book_number,
-                    fts.chapter,
-                    fts.verse,
-                ) {
-                    results.push(SemanticSearchResult {
-                        verse_ref: format!("{} {}:{}", v.book_name, v.chapter, v.verse),
-                        verse_text: v.text,
-                        book_name: v.book_name,
-                        book_number: v.book_number,
-                        chapter: v.chapter,
-                        verse: v.verse,
-                        similarity,
-                    });
-                }
-            }
-        }
-    }
+                    hit.key.book_number,
+                    hit.key.chapter,
+                    hit.key.verse,
+                )
+                .ok()
+                .flatten()?;
 
-    // Ensure highest similarity is always first
-    results.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
+            let mut sources = Vec::with_capacity(2);
+            if hit.cosine.is_some() {
+                sources.push("semantic".to_string());
+            }
+            if hit.from_fts {
+                sources.push("keyword".to_string());
+            }
+
+            // Display value only — ordering is the RRF score. Semantic hits
+            // show their real cosine; keyword-only hits keep the legacy
+            // rank-derived confidence until the UI grows source badges.
+            let similarity = hit.cosine.unwrap_or_else(|| {
+                (FTS5_RANK0_CONFIDENCE - fts_rank as f64 * FTS5_CONFIDENCE_DECAY)
+                    .max(FTS5_MIN_CONFIDENCE)
+            });
+
+            Some(SemanticSearchResult {
+                verse_ref: format!("{} {}:{}", v.book_name, v.chapter, v.verse),
+                verse_text: v.text,
+                book_name: v.book_name,
+                book_number: v.book_number,
+                chapter: v.chapter,
+                verse: v.verse,
+                similarity,
+                sources,
+            })
+        })
+        .collect();
 
     Ok(results)
 }

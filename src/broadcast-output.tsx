@@ -2,7 +2,10 @@ import { createRoot } from "react-dom/client"
 import { useRef, useEffect, useCallback } from "react"
 import { invoke } from "@tauri-apps/api/core"
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow"
-import { renderVerse } from "@/lib/verse-renderer"
+import { onThemeFontsLoaded, renderVerse } from "@/lib/verse-renderer"
+import { preloadThemeImages, themeImageCache } from "@/lib/theme-image-cache"
+import { normalizeTheme } from "@/lib/theme-migrations"
+import "./broadcast-fonts.css"
 import type { BroadcastTheme, VerseRenderData } from "@/types/broadcast"
 import type { NdiConfigEventPayload, NdiFrameRequest } from "@/types"
 
@@ -38,7 +41,6 @@ const FADE_DURATION_MS = 800
 function BroadcastCanvas() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const latestData = useRef<BroadcastPayload | null>(null)
-  const imageCacheRef = useRef<Map<string, HTMLImageElement>>(new Map())
   const ndiConfigRef = useRef<NdiConfigEventPayload>({
     active: false,
     fps: 24,
@@ -53,6 +55,7 @@ function BroadcastCanvas() {
   const rafRef = useRef<number | null>(null)
   const lastFrameTimeRef = useRef<number | null>(null)
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pushNdiBurstRef = useRef<(() => void) | null>(null)
 
   const logDebug = useCallback((message: string, meta?: unknown) => {
     if (!import.meta.env.DEV) return
@@ -92,7 +95,7 @@ function BroadcastCanvas() {
 
     const result = renderVerse(ctx, theme, verse, {
       scale: 1,
-      imageCache: imageCacheRef.current,
+      imageCache: themeImageCache(),
     })
     ctx.globalAlpha = 1
     if (!result) {
@@ -159,36 +162,15 @@ function BroadcastCanvas() {
     [clearIdleTimer, logDebug, setFadeTarget]
   )
 
-  const preloadImage = useCallback(
-    (url: string, label: string) => {
-      const cache = imageCacheRef.current
-      if (cache.has(url)) return
-
-      const img = new Image()
-      img.onload = () => {
-        cache.set(url, img)
-        logDebug(`${label} loaded`, { url })
-        draw()
-      }
-      img.onerror = () => {
-        console.warn(`[broadcast-output] failed to load ${label}`, { url })
-      }
-      img.src = url
-    },
-    [draw, logDebug]
-  )
-
-  const preloadThemeImages = useCallback(
-    (theme: BroadcastTheme) => {
-      if (theme.background.type === "image" && theme.background.image?.url) {
-        preloadImage(theme.background.image.url, "Background image")
-      }
-      if (theme.logoOverlay.enabled && theme.logoOverlay.image?.url) {
-        preloadImage(theme.logoOverlay.image.url, "Logo overlay image")
-      }
-    },
-    [preloadImage]
-  )
+  // Redraw once a theme's images land. The burst matters: without it NDI
+  // receivers keep the flat fallback frame until the 2s keepalive fires.
+  const preloadThemeAssets = useCallback((theme: BroadcastTheme) => {
+    preloadThemeImages(theme, () => {
+      logDebug("Theme images loaded")
+      draw()
+      pushNdiBurstRef.current?.()
+    })
+  }, [draw, logDebug])
 
   const pushNdiFrame = useCallback(async () => {
     if (!ndiConfigRef.current.active) return
@@ -247,6 +229,13 @@ function BroadcastCanvas() {
     setTimeout(() => void pushNdiFrame(), 300)
   }, [pushNdiFrame])
 
+  // Image loads finish after the burst that followed their theme update, and
+  // the preload callback is defined above this — go through a ref so it can
+  // re-burst without a definition cycle.
+  useEffect(() => {
+    pushNdiBurstRef.current = pushNdiBurst
+  }, [pushNdiBurst])
+
   useEffect(() => {
     // Set initial canvas size
     const canvas = canvasRef.current
@@ -263,8 +252,11 @@ function BroadcastCanvas() {
     const currentWindow = getCurrentWebviewWindow()
     logDebug("Listener registration started", { label: currentWindow.label })
     const unlisten = currentWindow.listen<BroadcastPayload>("broadcast:verse-update", (event) => {
-      latestData.current = event.payload
-      preloadThemeImages(event.payload.theme)
+      latestData.current = {
+        ...event.payload,
+        theme: normalizeTheme(event.payload.theme),
+      }
+      preloadThemeAssets(event.payload.theme)
       logDebug("Received broadcast:verse-update", {
         hasVerse: Boolean(event.payload.verse),
         themeId: event.payload.theme.id,
@@ -305,13 +297,21 @@ function BroadcastCanvas() {
         // Command may not exist yet
       })
 
-    void currentWindow.emitTo("main", "broadcast:output-ready").then(() => {
+    // Redraw whenever a theme webfont finishes loading (the renderer requests
+    // them on demand) so frames drawn against fallback metrics are replaced.
+    const unsubscribeFonts = onThemeFontsLoaded(() => {
+      draw()
+      pushNdiBurst()
+    })
+
+    void currentWindow.emitTo("main", "broadcast:output-ready", { outputId: OUTPUT_ID }).then(() => {
       logDebug("Sent broadcast:output-ready")
     }).catch(() => {
       console.warn("[broadcast-output] failed to send output-ready event")
     })
 
     return () => {
+      unsubscribeFonts()
       unlisten.then((fn) => fn())
       unlistenNdiConfig.then((fn) => fn())
       clearIdleTimer()
@@ -320,7 +320,7 @@ function BroadcastCanvas() {
   }, [
     draw,
     logDebug,
-    preloadThemeImages,
+    preloadThemeAssets,
     pushNdiFrame,
     pushNdiBurst,
     setFadeTarget,

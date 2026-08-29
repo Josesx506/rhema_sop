@@ -26,6 +26,8 @@ export interface ReadingAdvance {
 export interface DetectionStatus {
   has_direct: boolean
   has_semantic: boolean
+  /** Set when the embedding index mismatches the loaded model — shown as a warning banner. */
+  embedding_warning?: string | null
 }
 
 export interface SemanticSearchResult {
@@ -36,4 +38,6 @@ export interface SemanticSearchResult {
   chapter: number
   verse: number
   similarity: number
+  /** Which engines found this verse: "reference", "semantic", and/or "keyword". */
+  sources?: string[]
 }

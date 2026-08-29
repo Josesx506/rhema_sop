@@ -4,14 +4,14 @@
   "description": "enables the default permissions",
   "windows": [
     "main",
-    "broadcast",
-    "broadcast-alt"
+    "broadcast-*"
   ],
   "permissions": [
     "core:default",
     "store:default",
     "dialog:default",
     "fs:default",
-    "fs:allow-write-text-file"
+    "fs:allow-write-text-file",
+    "log:default"
   ]
 }
