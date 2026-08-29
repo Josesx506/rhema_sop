@@ -1,13 +1,11 @@
-import { RadioIcon } from "lucide-react"
 import { PanelHeader } from "@/components/ui/panel-header"
-import { Button } from "@/components/ui/button"
 import { useSlideStore } from "@/stores/slide-store"
 
 /**
  * Preview-before-live for slide decks (fork feature): clicking a thumbnail
- * in the deck panel only updates this preview — nothing goes to the
- * congregation display until the operator explicitly hits "Go live" (or
- * double-clicks the thumbnail).
+ * in the deck panel only updates this preview — nothing reaches the
+ * congregation display until the operator double-clicks the thumbnail to
+ * present it (no separate go-live control here, matching Scripture mode).
  */
 export function SlidePreviewPanel() {
   const decks = useSlideStore((s) => s.decks)
@@ -17,26 +15,12 @@ export function SlidePreviewPanel() {
   const previewDeck = decks.find((d) => d.id === previewDeckId) ?? null
   const previewPage = previewDeck?.pages[previewPageIndex] ?? null
 
-  const handleGoLive = () => {
-    useSlideStore.getState().presentPreviewed()
-  }
-
   return (
     <div
       data-slot="slide-preview-panel"
       className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-card"
     >
-      <PanelHeader title="Preview">
-        <Button
-          variant="default"
-          size="xs"
-          disabled={!previewDeck}
-          onClick={handleGoLive}
-        >
-          <RadioIcon />
-          Go live
-        </Button>
-      </PanelHeader>
+      <PanelHeader title="Preview" />
 
       <div className="flex min-h-0 flex-1 flex-col gap-2 p-3">
         <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-md bg-black">

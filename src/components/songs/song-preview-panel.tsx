@@ -1,5 +1,4 @@
 import { PanelHeader } from "@/components/ui/panel-header"
-import { Button } from "@/components/ui/button"
 import { CanvasVerse } from "@/components/ui/canvas-verse"
 import { useBroadcastStore } from "@/stores/broadcast-store"
 import { useSongStore } from "@/stores/song-store"
@@ -8,7 +7,9 @@ import { blockToRenderData } from "@/lib/songs/song-to-render-data"
 /**
  * Preview step for the songs module: single-clicking a setlist block lands
  * here (see setlist-panel.tsx), never straight onto the live output. The
- * operator confirms with "Go live" (or Enter) to present it.
+ * operator presents with Enter or a double-click on the block; the Live
+ * pane's toggle governs whether the output is on air (same as Scripture
+ * mode — no separate go-live control here).
  */
 export function SongPreviewPanel() {
   const setlist = useSongStore((s) => s.setlist)
@@ -29,15 +30,7 @@ export function SongPreviewPanel() {
       data-slot="song-preview-panel"
       className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-card"
     >
-      <PanelHeader title="Preview">
-        <Button
-          size="sm"
-          disabled={!previewBlock}
-          onClick={() => useSongStore.getState().presentPreviewed()}
-        >
-          Go live
-        </Button>
-      </PanelHeader>
+      <PanelHeader title="Preview" />
 
       <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 p-3">
         {verseData && previewBlock ? (
