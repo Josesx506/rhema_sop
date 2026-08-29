@@ -6,17 +6,31 @@
  * broadcast-ready image in-app with pdfjs-dist rather than shelling out to
  * a native converter. Decks are session-only — nothing here touches disk
  * beyond the one-time read of the picked file.
+ *
+ * WKWebView compatibility notes (hard-won):
+ * - The LEGACY pdfjs build, deliberately: the modern build uses ES2025
+ *   iterator helpers (the `Iterator` global) that WKWebView on macOS 14
+ *   lacks — imports fail with "Can't find variable: Iterator".
+ * - Render with `canvasContext` ONLY (canvas must not be passed): pdf.js
+ *   v6's preferred `canvas` param renders via OffscreenCanvas in the
+ *   worker, which deadlocks WKWebView — a real deck froze at 2/11 pages.
+ *   Same reason `isOffscreenCanvasSupported: false` is set on getDocument.
+ * - Pages render serially. The pdf.js worker pipelines parsing internally,
+ *   and serial main-thread rasterization is fast once the REAL worker is
+ *   loaded — the `?url` import below guarantees the worker URL resolves in
+ *   both dev and build, so pdf.js never falls back to its main-thread
+ *   "fake worker" (the original cause of slow imports).
  */
 
 import { open } from "@tauri-apps/plugin-dialog"
 import { readFile } from "@tauri-apps/plugin-fs"
+import pdfWorkerUrl from "pdfjs-dist/legacy/build/pdf.worker.min.mjs?url"
 
 /** Longest side of a rendered page image, in pixels. */
 const MAX_SIDE = 1920
 
-/** How many pages render concurrently. Keeps memory/CPU bounded while still
- * getting most of the parallelism win over rendering strictly serially. */
-const RENDER_CONCURRENCY = 4
+/** A page render that makes no progress fails loudly instead of hanging. */
+const PAGE_RENDER_TIMEOUT_MS = 30_000
 
 export interface ImportedDeck {
   name: string
@@ -28,17 +42,32 @@ function basename(path: string): string {
   return withoutDir.replace(/\.pdf$/i, "")
 }
 
+function withTimeout<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`${what} timed out after ${ms / 1000}s`)),
+      ms
+    )
+    promise.then(
+      (v) => {
+        clearTimeout(timer)
+        resolve(v)
+      },
+      (e) => {
+        clearTimeout(timer)
+        reject(e)
+      }
+    )
+  })
+}
+
 /**
  * Opens a native "pick a PDF" dialog, reads it, and renders every page to a
  * JPEG data URL sized for broadcast (longest side scaled to MAX_SIDE).
- * Pages render concurrently (small worker pool) rather than one at a time,
- * which is the difference between a large deck taking tens of seconds vs.
- * only a few — but the returned `pages` array is still in page order.
  * Returns null if the user cancels the dialog.
  *
  * `onProgress`, when given, is invoked after each page finishes rendering
- * with (pages done so far, total pages) — pages may complete out of order
- * under concurrency, so this is a count, not necessarily the page number.
+ * with (pages done so far, total pages).
  */
 export async function importPdfDeck(
   onProgress?: (done: number, total: number) => void
@@ -60,29 +89,22 @@ export async function importPdfDeck(
   }
 
   try {
-    // The legacy build, deliberately: the modern build uses ES2025 iterator
-    // helpers (the `Iterator` global), which WKWebView's engine on macOS 14
-    // doesn't have — imports fail with "Can't find variable: Iterator".
     const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs")
-    pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-      "pdfjs-dist/legacy/build/pdf.worker.min.mjs",
-      import.meta.url
-    ).toString()
+    pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl
 
-    const doc = await pdfjsLib.getDocument({ data: bytes }).promise
+    const doc = await withTimeout(
+      pdfjsLib.getDocument({ data: bytes, isOffscreenCanvasSupported: false })
+        .promise,
+      PAGE_RENDER_TIMEOUT_MS,
+      "Opening the PDF"
+    )
     const total = doc.numPages
     if (total === 0) {
       throw new Error(`"${name}.pdf" has no pages`)
     }
 
-    // Page order must survive concurrency: each worker writes its result
-    // into its own page's slot rather than pushing, so `pages` comes out in
-    // page order no matter which page finishes rendering first.
-    const pages: string[] = new Array(total)
-    let done = 0
-    let nextPageNumber = 1
-
-    async function renderOnePage(pageNumber: number): Promise<void> {
+    const pages: string[] = []
+    for (let pageNumber = 1; pageNumber <= total; pageNumber++) {
       const page = await doc.getPage(pageNumber)
       const baseViewport = page.getViewport({ scale: 1 })
       const longestSide = Math.max(baseViewport.width, baseViewport.height)
@@ -97,23 +119,18 @@ export async function importPdfDeck(
         throw new Error("Could not create a 2D canvas context to render the PDF")
       }
 
-      await page.render({ canvas, canvasContext: context, viewport }).promise
-      pages[pageNumber - 1] = canvas.toDataURL("image/jpeg", 0.85)
-      done += 1
-      onProgress?.(done, total)
+      await withTimeout(
+        page.render({ canvas: null, canvasContext: context, viewport }).promise,
+        PAGE_RENDER_TIMEOUT_MS,
+        `Rendering page ${pageNumber}/${total}`
+      )
+      pages.push(canvas.toDataURL("image/jpeg", 0.85))
+      page.cleanup()
+      onProgress?.(pageNumber, total)
     }
 
-    async function worker(): Promise<void> {
-      while (nextPageNumber <= total) {
-        const pageNumber = nextPageNumber
-        nextPageNumber += 1
-        await renderOnePage(pageNumber)
-      }
-    }
-
-    const workerCount = Math.min(RENDER_CONCURRENCY, total)
-    await Promise.all(Array.from({ length: workerCount }, () => worker()))
-
+    // Free worker-side parsing state; the rendered JPEGs are all we keep.
+    void doc.loadingTask.destroy()
     return { name, pages }
   } catch (err) {
     if (err instanceof Error) {

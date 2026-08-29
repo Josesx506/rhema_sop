@@ -42,6 +42,32 @@ export class PresentationController {
       this.cb.ndiBurst()
       return
     }
+
+    // Same-src video payloads update in place — pause/resume/loop/volume
+    // changes must not restart playback from the beginning. (Stop → play
+    // DOES restart, because clear tears the element down.)
+    if (
+      payload.kind === "video" &&
+      this.content?.kind === "video" &&
+      this.content.src === payload.src &&
+      this.video
+    ) {
+      this.content = payload
+      this.video.loop = payload.loop ?? true
+      this.video.volume = payload.volume ?? 0
+      this.video.muted = (payload.volume ?? 0) === 0
+      if (payload.paused && !this.video.paused) {
+        this.video.pause()
+        // rVFC stops firing while paused; push the held frame so NDI
+        // receivers see it before the keepalive would.
+        this.cb.redraw()
+        this.cb.ndiBurst()
+      } else if (!payload.paused && this.video.paused) {
+        void this.video.play().catch(() => {})
+      }
+      return
+    }
+
     this.teardown()
     this.content = payload
 

@@ -1,4 +1,4 @@
-import { PlayIcon, PlusIcon, SquareIcon, XIcon, FilmIcon } from "lucide-react"
+import { PauseIcon, PlayIcon, PlusIcon, SquareIcon, XIcon, FilmIcon } from "lucide-react"
 import { PanelHeader } from "@/components/ui/panel-header"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
@@ -6,15 +6,15 @@ import { Slider } from "@/components/ui/slider"
 import { cn } from "@/lib/utils"
 import { useMediaStore, type MediaLoopItem } from "@/stores/media-store"
 
-function MediaItemRow({ item, isPlaying }: { item: MediaLoopItem; isPlaying: boolean }) {
-  const handleToggle = () => {
-    if (isPlaying) {
-      useMediaStore.getState().stop()
-    } else {
-      useMediaStore.getState().play(item.id)
-    }
-  }
-
+function MediaItemRow({
+  item,
+  isPlaying,
+  isPaused,
+}: {
+  item: MediaLoopItem
+  isPlaying: boolean
+  isPaused: boolean
+}) {
   const handleRemove = () => {
     useMediaStore.getState().removeItem(item.id)
   }
@@ -32,19 +32,54 @@ function MediaItemRow({ item, isPlaying }: { item: MediaLoopItem; isPlaying: boo
           {item.name}
         </span>
         {isPlaying && (
-          <span className="flex shrink-0 items-center gap-1 rounded-sm bg-destructive/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wider text-destructive">
-            <span className="size-1.5 animate-pulse rounded-full bg-destructive" />
-            Live
+          <span
+            className={cn(
+              "flex shrink-0 items-center gap-1 rounded-sm px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wider",
+              isPaused
+                ? "bg-amber-500/15 text-amber-500"
+                : "bg-destructive/15 text-destructive"
+            )}
+          >
+            <span
+              className={cn(
+                "size-1.5 rounded-full",
+                isPaused ? "bg-amber-500" : "animate-pulse bg-destructive"
+              )}
+            />
+            {isPaused ? "Paused" : "Live"}
           </span>
         )}
-        <Button
-          variant={isPlaying ? "destructive" : "outline"}
-          size="icon-xs"
-          onClick={handleToggle}
-          aria-label={isPlaying ? "Stop" : "Play"}
-        >
-          {isPlaying ? <SquareIcon className="size-2.5" /> : <PlayIcon className="size-2.5" />}
-        </Button>
+        {isPlaying ? (
+          <>
+            <Button
+              variant="outline"
+              size="icon-xs"
+              onClick={() => useMediaStore.getState().togglePause()}
+              aria-label={isPaused ? "Resume" : "Pause"}
+              title={isPaused ? "Resume" : "Pause (holds the current frame on air)"}
+            >
+              {isPaused ? <PlayIcon className="size-2.5" /> : <PauseIcon className="size-2.5" />}
+            </Button>
+            <Button
+              variant="destructive"
+              size="icon-xs"
+              onClick={() => useMediaStore.getState().stop()}
+              aria-label="Stop"
+              title="Stop (releases the output; play restarts from the beginning)"
+            >
+              <SquareIcon className="size-2.5" />
+            </Button>
+          </>
+        ) : (
+          <Button
+            variant="outline"
+            size="icon-xs"
+            onClick={() => useMediaStore.getState().play(item.id)}
+            aria-label="Play"
+          >
+            <PlayIcon className="size-2.5" />
+          </Button>
+        )}
         <Button variant="ghost" size="icon-xs" onClick={handleRemove} aria-label="Remove">
           <XIcon className="size-2.5" />
         </Button>
@@ -83,6 +118,7 @@ function MediaItemRow({ item, isPlaying }: { item: MediaLoopItem; isPlaying: boo
 export function MediaPanel() {
   const items = useMediaStore((s) => s.items)
   const playingId = useMediaStore((s) => s.playingId)
+  const paused = useMediaStore((s) => s.paused)
 
   return (
     <div
@@ -108,7 +144,12 @@ export function MediaPanel() {
             </p>
           )}
           {items.map((item) => (
-            <MediaItemRow key={item.id} item={item} isPlaying={item.id === playingId} />
+            <MediaItemRow
+              key={item.id}
+              item={item}
+              isPlaying={item.id === playingId}
+              isPaused={item.id === playingId && paused}
+            />
           ))}
         </div>
       </div>

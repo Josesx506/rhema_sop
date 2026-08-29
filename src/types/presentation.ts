@@ -29,5 +29,9 @@ export type PresentationPayload =
       loop?: boolean
       /** Playback volume 0..1; default 0 (announcement loops are silent). */
       volume?: number
+      /** Hold the current frame (video keeps the channel; resume with
+       * paused: false). A payload with the same src updates in place —
+       * playback position is preserved. */
+      paused?: boolean
     }
   | { kind: "clear" }

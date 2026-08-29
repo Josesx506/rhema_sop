@@ -31,6 +31,8 @@ interface MediaState {
   items: MediaLoopItem[]
   /** ID of the item currently on air, or null if nothing is playing. */
   playingId: string | null
+  /** Playing item is holding its current frame (still owns the output). */
+  paused: boolean
 
   /** Opens the file picker and adds the chosen video to the list. */
   addItem: () => Promise<void>
@@ -38,13 +40,18 @@ interface MediaState {
   updateItem: (id: string, patch: Partial<Pick<MediaLoopItem, "loop" | "volume">>) => void
   /** Presents the item's video on all outputs and marks it as on air. */
   play: (id: string) => void
-  /** Clears the output and marks nothing as on air. */
+  /** Pause holds the frame and KEEPS the channel (still supersedes
+   * verses/slides); resume continues from the same position. */
+  togglePause: () => void
+  /** Clears the output and marks nothing as on air. A later play() starts
+   * from the beginning — stop releases the channel entirely. */
   stop: () => void
 }
 
 export const useMediaStore = create<MediaState>((set, get) => ({
   items: [],
   playingId: null,
+  paused: false,
 
   addItem: async () => {
     try {
@@ -85,7 +92,11 @@ export const useMediaStore = create<MediaState>((set, get) => ({
     if (state.playingId === id) {
       const item = state.items.find((i) => i.id === id)
       if (item) {
-        presentVideo(item.src, { loop: item.loop, volume: item.volume })
+        presentVideo(item.src, {
+          loop: item.loop,
+          volume: item.volume,
+          paused: state.paused,
+        })
       }
     }
   },
@@ -93,13 +104,22 @@ export const useMediaStore = create<MediaState>((set, get) => ({
   play: (id) => {
     const item = get().items.find((i) => i.id === id)
     if (!item) return
-    presentVideo(item.src, { loop: item.loop, volume: item.volume })
-    set({ playingId: id })
+    presentVideo(item.src, { loop: item.loop, volume: item.volume, paused: false })
+    set({ playingId: id, paused: false })
+  },
+
+  togglePause: () => {
+    const { playingId, paused, items } = get()
+    const item = items.find((i) => i.id === playingId)
+    if (!item) return
+    const next = !paused
+    presentVideo(item.src, { loop: item.loop, volume: item.volume, paused: next })
+    set({ paused: next })
   },
 
   stop: () => {
     clearPresentation()
-    set({ playingId: null })
+    set({ playingId: null, paused: false })
   },
 }))
 
@@ -111,6 +131,6 @@ usePresentationOnAir.subscribe((state, prev) => {
   if (state.onAir === prev.onAir) return
   if (useMediaStore.getState().playingId === null) return
   if (!state.onAir || state.onAir.kind !== "video") {
-    useMediaStore.setState({ playingId: null })
+    useMediaStore.setState({ playingId: null, paused: false })
   }
 })

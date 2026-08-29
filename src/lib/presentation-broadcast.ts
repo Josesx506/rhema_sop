@@ -37,10 +37,16 @@ function emitToAllOutputs(payload: PresentationPayload): void {
 export function presentSlide(dataUrl: string, fit?: "contain" | "cover"): void {
   const payload = { kind: "slide" as const, dataUrl, fit }
   usePresentationOnAir.setState({ onAir: payload })
-  emitToAllOutputs(payload)
+  // Slides are gated by the Live toggle like verses and songs — the
+  // selection is remembered and goes out when Live flips on (see the
+  // isLive subscription below). Videos deliberately bypass the gate.
+  if (useBroadcastStore.getState().isLive) emitToAllOutputs(payload)
 }
 
-export function presentVideo(src: string, opts?: { loop?: boolean; volume?: number }): void {
+export function presentVideo(
+  src: string,
+  opts?: { loop?: boolean; volume?: number; paused?: boolean }
+): void {
   const payload = { kind: "video" as const, src, ...opts }
   usePresentationOnAir.setState({ onAir: payload })
   emitToAllOutputs(payload)
@@ -62,6 +68,21 @@ useBroadcastStore.subscribe((state, prev) => {
     usePresentationOnAir.getState().onAir
   ) {
     clearPresentation()
+  }
+})
+
+// The Live toggle gates slides exactly like verses/songs: flipping it on
+// puts the remembered slide on air, flipping it off blanks the outputs but
+// keeps the selection so it comes back with the toggle. Videos bypass the
+// gate entirely (they have no preview and no theme — see media module).
+useBroadcastStore.subscribe((state, prev) => {
+  if (state.isLive === prev.isLive) return
+  const { onAir } = usePresentationOnAir.getState()
+  if (onAir?.kind !== "slide") return
+  if (state.isLive) {
+    emitToAllOutputs(onAir)
+  } else {
+    emitToAllOutputs({ kind: "clear" })
   }
 })
 

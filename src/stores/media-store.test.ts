@@ -76,7 +76,7 @@ describe("play", () => {
 
     useMediaStore.getState().play(item.id)
 
-    expect(presentVideoMock).toHaveBeenCalledWith(item.src, { loop: false, volume: 0.4 })
+    expect(presentVideoMock).toHaveBeenCalledWith(item.src, { loop: false, volume: 0.4, paused: false })
     expect(useMediaStore.getState().playingId).toBe(item.id)
   })
 })
@@ -90,6 +90,64 @@ describe("stop", () => {
 
     expect(clearPresentationMock).toHaveBeenCalledTimes(1)
     expect(useMediaStore.getState().playingId).toBeNull()
+    expect(useMediaStore.getState().paused).toBe(false)
+  })
+})
+
+describe("togglePause", () => {
+  it("pause re-presents with paused: true and KEEPS the channel (no clear)", () => {
+    const item = makeItem({ loop: true, volume: 0.2 })
+    useMediaStore.setState({ items: [item], playingId: item.id, paused: false })
+    presentVideoMock.mockClear()
+
+    useMediaStore.getState().togglePause()
+
+    expect(presentVideoMock).toHaveBeenCalledWith(item.src, {
+      loop: true,
+      volume: 0.2,
+      paused: true,
+    })
+    expect(clearPresentationMock).not.toHaveBeenCalled()
+    expect(useMediaStore.getState().paused).toBe(true)
+    expect(useMediaStore.getState().playingId).toBe(item.id)
+  })
+
+  it("resume re-presents with paused: false", () => {
+    const item = makeItem()
+    useMediaStore.setState({ items: [item], playingId: item.id, paused: true })
+    presentVideoMock.mockClear()
+
+    useMediaStore.getState().togglePause()
+
+    expect(presentVideoMock).toHaveBeenCalledWith(item.src, {
+      loop: item.loop,
+      volume: item.volume,
+      paused: false,
+    })
+    expect(useMediaStore.getState().paused).toBe(false)
+  })
+
+  it("is a no-op when nothing is playing", () => {
+    useMediaStore.setState({ items: [makeItem()], playingId: null })
+    presentVideoMock.mockClear()
+
+    useMediaStore.getState().togglePause()
+
+    expect(presentVideoMock).not.toHaveBeenCalled()
+  })
+
+  it("updateItem on a paused playing item keeps it paused", () => {
+    const item = makeItem()
+    useMediaStore.setState({ items: [item], playingId: item.id, paused: true })
+    presentVideoMock.mockClear()
+
+    useMediaStore.getState().updateItem(item.id, { volume: 0.5 })
+
+    expect(presentVideoMock).toHaveBeenCalledWith(item.src, {
+      loop: item.loop,
+      volume: 0.5,
+      paused: true,
+    })
   })
 })
 
@@ -137,7 +195,7 @@ describe("updateItem", () => {
 
     useMediaStore.getState().updateItem(item.id, { volume: 0.7 })
 
-    expect(presentVideoMock).toHaveBeenCalledWith(item.src, { loop: true, volume: 0.7 })
+    expect(presentVideoMock).toHaveBeenCalledWith(item.src, { loop: true, volume: 0.7, paused: false })
     expect(useMediaStore.getState().items[0].volume).toBe(0.7)
   })
 
