@@ -60,6 +60,10 @@ function BroadcastCanvas() {
   const rafRef = useRef<number | null>(null)
   const lastFrameTimeRef = useRef<number | null>(null)
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // presentedAt of the verse the fade timer was last armed for; undefined =
+  // nothing shown. Only a CHANGED stamp re-arms the timer, so incidental
+  // re-emits (theme edits, output syncs) can't keep a stale verse alive.
+  const lastPresentStampRef = useRef<number | null | undefined>(undefined)
   const pushNdiBurstRef = useRef<(() => void) | null>(null)
   const presentationRef = useRef<PresentationController | null>(null)
 
@@ -278,9 +282,19 @@ function BroadcastCanvas() {
         themeId: event.payload.theme.id,
       })
       if (event.payload.verse) {
-        setFadeTarget(1)
-        armIdleTimer(event.payload.idleFadeMs ?? DEFAULT_IDLE_FADE_MS)
+        // A fresh present (new verse, re-detected same verse, or keepalive)
+        // carries a new presentedAt stamp — only then fade in and re-arm.
+        // An unchanged stamp is an incidental re-emit (theme edit, output
+        // sync): redraw, but leave the fade timer running. A missing stamp
+        // (older payload shape) always re-arms, matching prior behavior.
+        const stamp = event.payload.verse.presentedAt ?? null
+        if (stamp === null || stamp !== lastPresentStampRef.current) {
+          lastPresentStampRef.current = stamp
+          setFadeTarget(1)
+          armIdleTimer(event.payload.idleFadeMs ?? DEFAULT_IDLE_FADE_MS)
+        }
       } else {
+        lastPresentStampRef.current = undefined
         clearIdleTimer()
         setFadeTarget(0)
       }

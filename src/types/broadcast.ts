@@ -9,6 +9,11 @@ export interface VerseRenderData {
   /** Fork: suppress the idle fade for this content (song lyric blocks stay
    * up while the congregation sings). Absent/false = normal fade. */
   noAutoFade?: boolean
+  /** Fork: when this content was (re)presented. The output re-arms its idle
+   * fade timer only when this changes, so incidental re-emits (theme edits,
+   * output syncs) no longer keep a stale verse alive. Absent = always
+   * re-arm (pre-fork behavior). */
+  presentedAt?: number
 }
 
 export interface RenderOptions {

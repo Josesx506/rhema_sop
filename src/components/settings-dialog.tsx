@@ -465,8 +465,9 @@ function DisplayModeSection() {
           onValueChange={([v]) => setIdleFadeMs(v * 1000)}
         />
         <p className="text-[0.625rem] text-muted-foreground">
-          If no new verse is detected or presented within this time, the
-          broadcast display fades back to black on its own.
+          If the sermon stops relating to the displayed verse — no
+          re-detection or mention of it, and nothing new presented — for this
+          long, the broadcast display fades back to black on its own.
         </p>
       </div>
     </div>
