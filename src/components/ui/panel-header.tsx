@@ -21,7 +21,7 @@ function PanelHeader({
       )}
       {...props}
     >
-      <span className="flex items-center gap-2 text-[0.6875rem] font-medium uppercase tracking-wider text-muted-foreground">
+      <span className="flex items-center gap-2 text-[0.6875rem] font-medium uppercase tracking-wider whitespace-nowrap text-muted-foreground">
         {icon}
         {title}
       </span>
