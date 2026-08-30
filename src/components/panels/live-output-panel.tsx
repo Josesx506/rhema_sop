@@ -23,6 +23,7 @@ async function hasOpenBroadcastWindow(): Promise<boolean> {
 export function LiveOutputPanel() {
   const isLive = useBroadcastStore((s) => s.isLive)
   const autoLive = useBroadcastStore((s) => s.autoLive)
+  const outputBlanked = useBroadcastStore((s) => s.outputBlanked)
   const liveVerse = useBroadcastStore((s) => s.liveVerse)
   const themes = useBroadcastStore((s) => s.themes)
   const activeThemeId = useBroadcastStore((s) => s.activeThemeId)
@@ -105,6 +106,28 @@ export function LiveOutputPanel() {
       )}
     >
       <PanelHeader title="Live display">
+        {/* Fork: operator blank — fade the output to just the theme
+            background (verse/song/slide state is kept and restored). */}
+        <label
+          className="mr-2 flex items-center gap-2"
+          title="Fade the live output to just the theme background. Text and slides come back when turned off or when something new is presented. Videos are unaffected."
+        >
+          <span
+            className={cn(
+              "text-[0.625rem] font-medium uppercase tracking-wider transition-colors",
+              outputBlanked ? "text-amber-400" : "text-muted-foreground"
+            )}
+          >
+            Blank
+          </span>
+          <Switch
+            checked={outputBlanked}
+            onCheckedChange={(checked) =>
+              useBroadcastStore.getState().setOutputBlanked(checked)
+            }
+            className="data-[state=checked]:bg-amber-500"
+          />
+        </label>
         <label
           className="flex items-center gap-2"
           title="When on, detected verses are presented to the live display automatically. Turn off for manual control."
@@ -145,7 +168,10 @@ export function LiveOutputPanel() {
         className={cn(
           "flex min-h-0 flex-1 items-center justify-center p-3 transition-opacity duration-700",
           !isLive && !presentationShowing && "opacity-40",
-          faded && !presentationShowing && "opacity-0"
+          faded && !presentationShowing && "opacity-0",
+          // Mirror the operator blank: outputs fade to background only —
+          // videos ignore the blank, so their mirror stays visible.
+          outputBlanked && presentationOnAir?.kind !== "video" && "opacity-0"
         )}
       >
         {/* Fork: mirror slides/videos when the presentation channel owns

@@ -48,6 +48,31 @@ describe("broadcast store sync", () => {
     )
   })
 
+  it("setOutputBlanked fades the output to background and back, keeping liveVerse", async () => {
+    const { useBroadcastStore } = await import("./broadcast-store")
+    useBroadcastStore.setState({ isLive: true, liveVerse: sampleLiveVerse })
+
+    emitToMock.mockClear()
+    useBroadcastStore.getState().setOutputBlanked(true)
+    expect(emitToMock).toHaveBeenCalledWith(
+      "broadcast-main",
+      "broadcast:verse-update",
+      expect.objectContaining({ verse: null }),
+    )
+    // The logical live verse survives the blank so unblanking restores it.
+    expect(useBroadcastStore.getState().liveVerse).toEqual(sampleLiveVerse)
+
+    emitToMock.mockClear()
+    useBroadcastStore.getState().setOutputBlanked(false)
+    expect(emitToMock).toHaveBeenCalledWith(
+      "broadcast-main",
+      "broadcast:verse-update",
+      expect.objectContaining({
+        verse: expect.objectContaining({ reference: "John 3:16" }),
+      }),
+    )
+  })
+
   it("syncBroadcastOutput fans out to every output with its own theme", async () => {
     const { useBroadcastStore } = await import("./broadcast-store")
     const state = useBroadcastStore.getState()

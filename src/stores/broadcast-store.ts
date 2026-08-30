@@ -54,6 +54,11 @@ interface BroadcastState {
   setLive: (live: boolean) => void
   setLiveVerse: (verse: VerseRenderData | null, source?: Verse | null) => void
   setAutoLive: (auto: boolean) => void
+  /** Fork: operator blank — outputs fade to just the theme background while
+   * the live verse / on-air slide are remembered. Presenting different
+   * content releases the hold (see presentation-broadcast.ts). */
+  outputBlanked: boolean
+  setOutputBlanked: (blanked: boolean) => void
   syncBroadcastOutput: () => void
   syncBroadcastOutputFor: (outputId: string) => void
 
@@ -110,7 +115,7 @@ function setNestedValue(obj: Record<string, unknown>, path: string, value: unkno
 
 function emitDraftToBroadcast(state: BroadcastState): void {
   if (!state.draftTheme) return
-  const verse = state.isLive ? state.liveVerse : null
+  const verse = state.isLive && !state.outputBlanked ? state.liveVerse : null
   const idleFadeMs = verse?.noAutoFade ? 0 : useSettingsStore.getState().idleFadeMs
   for (const output of state.outputs) {
     if (output.themeId !== state.editingThemeId) continue
@@ -250,7 +255,7 @@ export const useBroadcastStore = create<BroadcastState>((set, get) => ({
 
     void emitTo(outputWindowLabel(outputId), "broadcast:verse-update", {
       theme,
-      verse: s.isLive ? s.liveVerse : null,
+      verse: s.isLive && !s.outputBlanked ? s.liveVerse : null,
       idleFadeMs:
         s.isLive && s.liveVerse?.noAutoFade
           ? 0
@@ -341,6 +346,11 @@ export const useBroadcastStore = create<BroadcastState>((set, get) => ({
     get().syncBroadcastOutput()
   },
   setAutoLive: (autoLive) => set({ autoLive }),
+  outputBlanked: false,
+  setOutputBlanked: (outputBlanked) => {
+    set({ outputBlanked })
+    get().syncBroadcastOutput()
+  },
 
   // Designer
   setDesignerOpen: (isDesignerOpen) => {
