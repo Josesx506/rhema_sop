@@ -227,6 +227,64 @@ describe("song store setlist", () => {
 
     expect(useSongStore.getState().setlist.map((e) => e.title)).toEqual(["B", "A"])
   })
+
+  it("toggleEntryCollapsed flips one entry; setAllEntriesCollapsed covers all", async () => {
+    const { useSongStore } = await import("./song-store")
+    const songA = makeSong({ title: "A", sections: [makeSection()], arrangement: [] })
+    const songB = makeSong({ title: "B", sections: [makeSection()], arrangement: [] })
+    useSongStore.setState({ songs: [songA, songB] })
+    useSongStore.getState().addSongToSetlist(songA.id)
+    useSongStore.getState().addSongToSetlist(songB.id)
+    const [entryA, entryB] = useSongStore.getState().setlist
+
+    useSongStore.getState().toggleEntryCollapsed(entryA.id)
+    expect(useSongStore.getState().collapsedEntryIds).toEqual({ [entryA.id]: true })
+
+    useSongStore.getState().toggleEntryCollapsed(entryA.id)
+    expect(useSongStore.getState().collapsedEntryIds).toEqual({})
+
+    useSongStore.getState().setAllEntriesCollapsed(true)
+    expect(useSongStore.getState().collapsedEntryIds).toEqual({
+      [entryA.id]: true,
+      [entryB.id]: true,
+    })
+
+    useSongStore.getState().setAllEntriesCollapsed(false)
+    expect(useSongStore.getState().collapsedEntryIds).toEqual({})
+  })
+
+  it("presenting or previewing into a collapsed entry expands it", async () => {
+    const { useSongStore } = await import("./song-store")
+    const song = makeSong({ sections: [makeSection()], arrangement: [] })
+    useSongStore.setState({ songs: [song] })
+    useSongStore.getState().addSongToSetlist(song.id)
+    const entry = useSongStore.getState().setlist[0]
+
+    useSongStore.getState().setAllEntriesCollapsed(true)
+    useSongStore.getState().presentBlock(entry.id, entry.blocks[0].id)
+    expect(useSongStore.getState().collapsedEntryIds).toEqual({})
+
+    useSongStore.getState().setAllEntriesCollapsed(true)
+    useSongStore.getState().previewBlock(entry.id, entry.blocks[0].id)
+    expect(useSongStore.getState().collapsedEntryIds).toEqual({})
+  })
+
+  it("removeEntry and clearSetlist drop collapse state for gone entries", async () => {
+    const { useSongStore } = await import("./song-store")
+    const songA = makeSong({ title: "A", sections: [makeSection()], arrangement: [] })
+    const songB = makeSong({ title: "B", sections: [makeSection()], arrangement: [] })
+    useSongStore.setState({ songs: [songA, songB] })
+    useSongStore.getState().addSongToSetlist(songA.id)
+    useSongStore.getState().addSongToSetlist(songB.id)
+    const [entryA, entryB] = useSongStore.getState().setlist
+
+    useSongStore.getState().setAllEntriesCollapsed(true)
+    useSongStore.getState().removeEntry(entryA.id)
+    expect(useSongStore.getState().collapsedEntryIds).toEqual({ [entryB.id]: true })
+
+    useSongStore.getState().clearSetlist()
+    expect(useSongStore.getState().collapsedEntryIds).toEqual({})
+  })
 })
 
 describe("song store presentation", () => {

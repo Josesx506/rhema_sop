@@ -4,7 +4,16 @@ import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
-import { ChevronLeftIcon, ChevronRightIcon, XIcon } from "lucide-react"
+import {
+  ArrowDownIcon,
+  ArrowUpIcon,
+  ChevronDownIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  ChevronsDownUpIcon,
+  ChevronsUpDownIcon,
+  XIcon,
+} from "lucide-react"
 import { useSongStore } from "@/stores/song-store"
 import type { SetlistEntry, SongBlock } from "@/types/songs"
 
@@ -57,44 +66,101 @@ function BlockRow({
 
 function SetlistEntryGroup({
   entry,
+  collapsed,
+  isFirst,
+  isLast,
   activeBlockId,
   previewBlockId,
+  onToggleCollapsed,
+  onMoveUp,
+  onMoveDown,
   onPreview,
   onPresent,
   onRemove,
 }: {
   entry: SetlistEntry
+  collapsed: boolean
+  isFirst: boolean
+  isLast: boolean
   activeBlockId: string | null
   previewBlockId: string | null
+  onToggleCollapsed: () => void
+  onMoveUp: () => void
+  onMoveDown: () => void
   onPreview: (blockId: string) => void
   onPresent: (blockId: string) => void
   onRemove: () => void
 }) {
+  const containsLive = entry.blocks.some((b) => b.id === activeBlockId)
   return (
     <div className="flex flex-col gap-0.5">
-      <div className="group flex items-center gap-1.5 px-1 pt-2 pb-1">
-        <span className="min-w-0 flex-1 truncate text-[0.6875rem] font-semibold tracking-wide text-muted-foreground uppercase">
-          {entry.title}
-        </span>
+      <div className="group flex items-center gap-1 px-1 pt-2 pb-1">
+        <button
+          onClick={onToggleCollapsed}
+          title={collapsed ? "Expand song" : "Collapse song"}
+          className="flex min-w-0 flex-1 items-center gap-1 text-left"
+        >
+          {collapsed ? (
+            <ChevronRightIcon className="size-3 shrink-0 text-muted-foreground" />
+          ) : (
+            <ChevronDownIcon className="size-3 shrink-0 text-muted-foreground" />
+          )}
+          <span
+            className={cn(
+              "min-w-0 flex-1 truncate text-[0.6875rem] font-semibold tracking-wide uppercase",
+              // Keep the on-air song findable while its rows are hidden.
+              collapsed && containsLive ? "text-primary" : "text-muted-foreground"
+            )}
+          >
+            {entry.title}
+          </span>
+          {collapsed && (
+            <span className="shrink-0 text-[0.625rem] text-muted-foreground/70">
+              {entry.blocks.length}
+            </span>
+          )}
+        </button>
         <Button
           variant="ghost"
           size="icon-xs"
           className="opacity-0 transition-opacity group-hover:opacity-100"
+          title="Move song up"
+          disabled={isFirst}
+          onClick={onMoveUp}
+        >
+          <ArrowUpIcon className="size-3" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          className="opacity-0 transition-opacity group-hover:opacity-100"
+          title="Move song down"
+          disabled={isLast}
+          onClick={onMoveDown}
+        >
+          <ArrowDownIcon className="size-3" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          className="opacity-0 transition-opacity group-hover:opacity-100"
+          title="Remove song"
           onClick={onRemove}
         >
           <XIcon className="size-3" />
         </Button>
       </div>
-      {entry.blocks.map((block) => (
-        <BlockRow
-          key={block.id}
-          block={block}
-          isLive={block.id === activeBlockId}
-          isPreviewed={block.id === previewBlockId}
-          onPreview={() => onPreview(block.id)}
-          onPresent={() => onPresent(block.id)}
-        />
-      ))}
+      {!collapsed &&
+        entry.blocks.map((block) => (
+          <BlockRow
+            key={block.id}
+            block={block}
+            isLive={block.id === activeBlockId}
+            isPreviewed={block.id === previewBlockId}
+            onPreview={() => onPreview(block.id)}
+            onPresent={() => onPresent(block.id)}
+          />
+        ))}
     </div>
   )
 }
@@ -103,11 +169,13 @@ export function SetlistPanel() {
   const setlist = useSongStore((s) => s.setlist)
   const activeBlockId = useSongStore((s) => s.activeBlockId)
   const previewBlockId = useSongStore((s) => s.previewBlockId)
+  const collapsedEntryIds = useSongStore((s) => s.collapsedEntryIds)
   const songs = useSongStore((s) => s.songs)
 
   const activeEntry = setlist.find((e) => e.blocks.some((b) => b.id === activeBlockId))
   const activeSong = activeEntry ? songs.find((s) => s.id === activeEntry.songId) : undefined
   const allowDuplicates = useSongStore((s) => s.allowSetlistDuplicates)
+  const allCollapsed = setlist.length > 0 && setlist.every((e) => collapsedEntryIds[e.id])
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -134,6 +202,19 @@ export function SetlistPanel() {
     >
       <PanelHeader title="Setlist">
         <div className="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            title={allCollapsed ? "Expand all songs" : "Collapse all songs"}
+            disabled={setlist.length === 0}
+            onClick={() => useSongStore.getState().setAllEntriesCollapsed(!allCollapsed)}
+          >
+            {allCollapsed ? (
+              <ChevronsUpDownIcon className="size-3.5" />
+            ) : (
+              <ChevronsDownUpIcon className="size-3.5" />
+            )}
+          </Button>
           <label
             className="mr-1 flex items-center gap-1.5 text-[0.625rem] uppercase tracking-wider text-muted-foreground"
             title="When off, each song can appear only once in the setlist"
@@ -174,12 +255,18 @@ export function SetlistPanel() {
               Add songs from the catalog to build a setlist
             </p>
           )}
-          {setlist.map((entry) => (
+          {setlist.map((entry, index) => (
             <SetlistEntryGroup
               key={entry.id}
               entry={entry}
+              collapsed={!!collapsedEntryIds[entry.id]}
+              isFirst={index === 0}
+              isLast={index === setlist.length - 1}
               activeBlockId={activeBlockId}
               previewBlockId={previewBlockId}
+              onToggleCollapsed={() => useSongStore.getState().toggleEntryCollapsed(entry.id)}
+              onMoveUp={() => useSongStore.getState().reorderEntries(index, index - 1)}
+              onMoveDown={() => useSongStore.getState().reorderEntries(index, index + 1)}
               onPreview={(blockId) => useSongStore.getState().previewBlock(entry.id, blockId)}
               onPresent={(blockId) => useSongStore.getState().presentBlock(entry.id, blockId)}
               onRemove={() => useSongStore.getState().removeEntry(entry.id)}

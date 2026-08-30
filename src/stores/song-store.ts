@@ -45,6 +45,14 @@ interface SongState {
   allowSetlistDuplicates: boolean
   setAllowSetlistDuplicates: (allow: boolean) => void
 
+  /** Entry ids whose block list is hidden in the setlist panel
+   * (session-only). Purely visual: presentation and arrow-key order still
+   * cover every block; presenting or previewing into a collapsed entry
+   * expands it so the on-air row stays visible. */
+  collapsedEntryIds: Record<string, true>
+  toggleEntryCollapsed: (entryId: string) => void
+  setAllEntriesCollapsed: (collapsed: boolean) => void
+
   // Presentation
   presentBlock: (entryId: string, blockId: string) => void
   nextBlock: () => void
@@ -68,6 +76,17 @@ export function matchesSearch(song: Song, query: string): boolean {
 
 function flattenSetlistBlocks(setlist: SetlistEntry[]): FlatBlockRef[] {
   return setlist.flatMap((entry) => entry.blocks.map((block) => ({ entryId: entry.id, block })))
+}
+
+/** Returns the map without entryId — or the same reference when absent. */
+function withoutCollapsed(
+  collapsed: Record<string, true>,
+  entryId: string
+): Record<string, true> {
+  if (!collapsed[entryId]) return collapsed
+  const next = { ...collapsed }
+  delete next[entryId]
+  return next
 }
 
 export const useSongStore = create<SongState>((set, get) => ({
@@ -94,6 +113,20 @@ export const useSongStore = create<SongState>((set, get) => ({
 
   allowSetlistDuplicates: false,
   setAllowSetlistDuplicates: (allowSetlistDuplicates) => set({ allowSetlistDuplicates }),
+
+  collapsedEntryIds: {},
+  toggleEntryCollapsed: (entryId) =>
+    set((s) => ({
+      collapsedEntryIds: s.collapsedEntryIds[entryId]
+        ? withoutCollapsed(s.collapsedEntryIds, entryId)
+        : { ...s.collapsedEntryIds, [entryId]: true },
+    })),
+  setAllEntriesCollapsed: (collapsed) =>
+    set((s) => ({
+      collapsedEntryIds: collapsed
+        ? Object.fromEntries(s.setlist.map((e) => [e.id, true]))
+        : {},
+    })),
 
   addSongToSetlist: (songId) => {
     const song = get().songs.find((s) => s.id === songId)
@@ -135,9 +168,17 @@ export const useSongStore = create<SongState>((set, get) => ({
         activeBlockId: activeWasInRemoved ? null : s.activeBlockId,
         previewEntryId: previewWasInRemoved ? null : s.previewEntryId,
         previewBlockId: previewWasInRemoved ? null : s.previewBlockId,
+        collapsedEntryIds: withoutCollapsed(s.collapsedEntryIds, entryId),
       }
     }),
-  clearSetlist: () => set({ setlist: [], activeBlockId: null, previewEntryId: null, previewBlockId: null }),
+  clearSetlist: () =>
+    set({
+      setlist: [],
+      activeBlockId: null,
+      previewEntryId: null,
+      previewBlockId: null,
+      collapsedEntryIds: {},
+    }),
   reorderEntries: (fromIndex, toIndex) =>
     set((s) => {
       if (
@@ -161,7 +202,12 @@ export const useSongStore = create<SongState>((set, get) => ({
     if (!entry || !block) return
     // Presenting also syncs the preview selection, so Enter/arrow-key
     // browsing continues from whatever just went on air.
-    set({ activeBlockId: block.id, previewEntryId: entryId, previewBlockId: block.id })
+    set((s) => ({
+      activeBlockId: block.id,
+      previewEntryId: entryId,
+      previewBlockId: block.id,
+      collapsedEntryIds: withoutCollapsed(s.collapsedEntryIds, entryId),
+    }))
     useBroadcastStore.getState().setLiveVerse(blockToRenderData(entry.title, block))
   },
   nextBlock: () => {
@@ -187,7 +233,11 @@ export const useSongStore = create<SongState>((set, get) => ({
     const entry = get().setlist.find((e) => e.id === entryId)
     const block = entry?.blocks.find((b) => b.id === blockId)
     if (!entry || !block) return
-    set({ previewEntryId: entryId, previewBlockId: block.id })
+    set((s) => ({
+      previewEntryId: entryId,
+      previewBlockId: block.id,
+      collapsedEntryIds: withoutCollapsed(s.collapsedEntryIds, entryId),
+    }))
   },
   previewNext: () => {
     const { setlist, previewBlockId } = get()
@@ -196,7 +246,7 @@ export const useSongStore = create<SongState>((set, get) => ({
     const currentIndex = flat.findIndex((f) => f.block.id === previewBlockId)
     const nextIndex = currentIndex === -1 ? 0 : Math.min(currentIndex + 1, flat.length - 1)
     const target = flat[nextIndex]
-    set({ previewEntryId: target.entryId, previewBlockId: target.block.id })
+    get().previewBlock(target.entryId, target.block.id)
   },
   previewPrev: () => {
     const { setlist, previewBlockId } = get()
@@ -205,7 +255,7 @@ export const useSongStore = create<SongState>((set, get) => ({
     const currentIndex = flat.findIndex((f) => f.block.id === previewBlockId)
     const prevIndex = currentIndex === -1 ? 0 : Math.max(currentIndex - 1, 0)
     const target = flat[prevIndex]
-    set({ previewEntryId: target.entryId, previewBlockId: target.block.id })
+    get().previewBlock(target.entryId, target.block.id)
   },
   presentPreviewed: () => {
     const { previewEntryId, previewBlockId } = get()
