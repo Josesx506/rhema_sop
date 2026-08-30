@@ -35,6 +35,7 @@
     "active": true,
     "targets": "all",
     "macOS": {
+      "minimumSystemVersion": "11.0",
       "signingIdentity": "-",
       "entitlements": "entitlements.plist",
       "infoPlist": "Info.plist"
