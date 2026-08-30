@@ -7,10 +7,19 @@ const STEP_DEFAULTS = {
 export const TUTORIAL_STEPS: Step[] = [
   {
     ...STEP_DEFAULTS,
+    target: '[data-tour="mode-tabs"]',
+    title: "Modes",
+    content:
+      "Switch what you're operating: Scripture for live verse detection, Songs for the lyrics catalog and setlist, Presentation for PDF slides and video loops.",
+    placement: "bottom",
+    spotlightPadding: 2,
+  },
+  {
+    ...STEP_DEFAULTS,
     target: '[data-slot="transcript-panel"]',
     title: "Live Transcript",
     content:
-      "Start transcribing to convert speech to text in real time. Detected Bible verses are highlighted automatically.",
+      "Start transcribing to convert speech to text in real time. Detected Bible verses are highlighted automatically — with the Auto switch on, they go straight to the live display.",
     placement: "right",
   },
   {
@@ -69,7 +78,7 @@ export const TUTORIAL_STEPS: Step[] = [
     target: '[data-slot="live-output-panel"]',
     title: "Live Display",
     content:
-      "The live output. Presented verses appear here and on connected displays or NDI outputs.",
+      "The live output. Go live gates what reaches connected displays and NDI; Blank fades the display to just the theme background between moments.",
     placement: "bottom",
   },
   {
@@ -93,7 +102,7 @@ export const TUTORIAL_STEPS: Step[] = [
     target: '[data-tour="settings"]',
     title: "Settings",
     content:
-      "Configure audio input, Bible translations, display mode, remote control, and API keys.",
+      "Configure audio input, Bible translations, display mode (including the idle fade and what a faded display shows), remote control, and API keys.",
     placement: "bottom",
   },
 ]

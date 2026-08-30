@@ -114,7 +114,7 @@ export function LiveOutputPanel() {
         {/* Fork: operator blank — fade the output to just the theme
             background (verse/song/slide state is kept and restored). */}
         <label
-          className="mr-2 flex items-center gap-2"
+          className="flex items-center gap-1.5"
           title="Fade the live output to just the theme background. Text and slides come back when turned off or when something new is presented. Videos are unaffected."
         >
           <span
@@ -137,7 +137,7 @@ export function LiveOutputPanel() {
             panel next to Start/Stop transcribing — it only affects
             scripture detection, so it sits with the transcription
             controls. */}
-        <label className="ml-2 flex items-center gap-2">
+        <label className="ml-1 flex items-center gap-1.5">
           <span
             className={cn(
               "text-[0.625rem] font-medium uppercase tracking-wider whitespace-nowrap transition-colors",

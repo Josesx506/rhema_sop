@@ -1,6 +1,7 @@
 import { create } from "zustand"
 import { load } from "@tauri-apps/plugin-store"
 import { useSettingsStore } from "./settings-store"
+import { useAppModeStore } from "./app-mode-store"
 
 interface TutorialState {
   isRunning: boolean
@@ -10,7 +11,12 @@ interface TutorialState {
 
 export const useTutorialStore = create<TutorialState>((set) => ({
   isRunning: false,
-  startTutorial: () => set({ isRunning: true }),
+  startTutorial: () => {
+    // Fork: the tour's targets live on the Scripture view — make sure it's
+    // showing even when the tutorial is restarted from another mode tab.
+    useAppModeStore.getState().setMode("scripture")
+    set({ isRunning: true })
+  },
   stopTutorial: () => set({ isRunning: false }),
 }))
 

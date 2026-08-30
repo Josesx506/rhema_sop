@@ -13,7 +13,7 @@ export function ModeTabs() {
   const setMode = useAppModeStore((s) => s.setMode)
 
   return (
-    <div className="flex items-center gap-1 px-3">
+    <div data-tour="mode-tabs" className="flex items-center gap-1 px-3">
       {MODES.map((m) => (
         <button
           key={m.id}

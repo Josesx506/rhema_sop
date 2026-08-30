@@ -361,8 +361,12 @@ function SpeechSection() {
 /* -------------------------------------------------------------------------- */
 
 function DisplayModeSection() {
+  // Fork: the radio reflects broadcast-store.autoLive — the flag the
+  // transcript panel's Auto switch and the auto-present flow actually use —
+  // so the two controls can never disagree. settings.autoMode is kept
+  // written as the persisted preference.
+  const autoLive = useBroadcastStore((s) => s.autoLive)
   const {
-    autoMode,
     setAutoMode,
     confidenceThreshold,
     setConfidenceThreshold,
@@ -384,14 +388,18 @@ function DisplayModeSection() {
         </label>
 
         <RadioGroup
-          value={autoMode ? "auto" : "manual"}
-          onValueChange={(v) => setAutoMode(v === "auto")}
+          value={autoLive ? "auto" : "manual"}
+          onValueChange={(v) => {
+            const auto = v === "auto"
+            setAutoMode(auto)
+            useBroadcastStore.getState().setAutoLive(auto)
+          }}
           className="gap-3"
         >
           {/* Auto mode */}
           <label
             className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors has-data-[state=checked]:border-primary/50 has-data-[state=checked]:bg-primary/5 has-data-[state=checked]:ring-1 has-data-[state=checked]:ring-primary/20 ${
-              !autoMode ? "hover:border-muted-foreground/25" : ""
+              !autoLive ? "hover:border-muted-foreground/25" : ""
             }`}
           >
             <RadioGroupItem value="auto" className="mt-0.5" />
@@ -408,7 +416,7 @@ function DisplayModeSection() {
           {/* Manual mode */}
           <label
             className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors has-data-[state=checked]:border-primary/50 has-data-[state=checked]:bg-primary/5 has-data-[state=checked]:ring-1 has-data-[state=checked]:ring-primary/20 ${
-              autoMode ? "hover:border-muted-foreground/25" : ""
+              autoLive ? "hover:border-muted-foreground/25" : ""
             }`}
           >
             <RadioGroupItem value="manual" className="mt-0.5" />
@@ -425,7 +433,7 @@ function DisplayModeSection() {
       </div>
 
       {/* Confidence threshold — only when auto */}
-      {autoMode && (
+      {autoLive && (
         <div className="flex flex-col gap-2">
           <div className="flex items-center justify-between">
             <label className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
