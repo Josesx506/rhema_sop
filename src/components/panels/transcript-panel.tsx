@@ -2,7 +2,9 @@ import { useCallback, useEffect, useRef, useState, type RefObject } from "react"
 import { PanelHeader } from "@/components/ui/panel-header"
 import { LevelMeter } from "@/components/ui/level-meter"
 import { Button } from "@/components/ui/button"
+import { Switch } from "@/components/ui/switch"
 import { ApiKeyPrompt } from "@/components/ui/api-key-prompt"
+import { cn } from "@/lib/utils"
 import { MicIcon, MicOffIcon } from "lucide-react"
 import {
   useAudioStore,
@@ -26,6 +28,33 @@ import type { DetectionResult, ReadingAdvance } from "@/types"
  * high-frequency `audio_level` tick (many times per second during recording)
  * does NOT re-render the transcript list, connection dot, or button subtree.
  */
+/** Fork: the auto-present switch (moved from the Live display header — it
+ * only affects verses detected from this transcript). */
+function AutoPresentToggle() {
+  const autoLive = useBroadcastStore((s) => s.autoLive)
+  return (
+    <label
+      className="ml-auto flex items-center gap-2"
+      title="When on, detected verses are presented to the live display automatically. Turn off for manual control."
+    >
+      <span
+        className={cn(
+          "text-[0.625rem] font-medium uppercase tracking-wider transition-colors",
+          autoLive ? "text-foreground" : "text-muted-foreground"
+        )}
+      >
+        Auto
+      </span>
+      <Switch
+        checked={autoLive}
+        onCheckedChange={(checked) =>
+          useBroadcastStore.getState().setAutoLive(checked)
+        }
+      />
+    </label>
+  )
+}
+
 function AudioLevelMeter() {
   const rms = useAudioStore((s) => s.level.rms)
   return <LevelMeter level={rms} bars={6} />
@@ -298,7 +327,7 @@ export function TranscriptPanel() {
       </div>
 
       {/* Bottom control */}
-      <div className="flex gap-2 border-t border-border px-3 py-2">
+      <div className="flex items-center gap-2 border-t border-border px-3 py-2">
         {isTranscribing ? (
           <Button
             variant="ghost"
@@ -315,6 +344,10 @@ export function TranscriptPanel() {
             Start transcribing
           </Button>
         )}
+        {/* Fork: Auto lives here rather than on the Live display — it only
+            auto-presents scripture detected from this transcript, so it
+            belongs with the transcription controls. */}
+        <AutoPresentToggle />
       </div>
 
       <ApiKeyPrompt

@@ -123,6 +123,9 @@ function emitDraftToBroadcast(state: BroadcastState): void {
       theme: state.draftTheme,
       verse,
       idleFadeMs,
+      idleFadeTarget: state.isLive
+        ? useSettingsStore.getState().idleFadeTarget
+        : "black",
     }).catch(() => {})
   }
 }
@@ -260,6 +263,12 @@ export const useBroadcastStore = create<BroadcastState>((set, get) => ({
         s.isLive && s.liveVerse?.noAutoFade
           ? 0
           : useSettingsStore.getState().idleFadeMs,
+      // Fork: what a faded-out output shows (idle fade / operator blank).
+      // Off-air always fades to black — the theme background only holds
+      // while the output is live.
+      idleFadeTarget: s.isLive
+        ? useSettingsStore.getState().idleFadeTarget
+        : "black",
     }).catch(() => {})
   },
   syncBroadcastOutput: () => {

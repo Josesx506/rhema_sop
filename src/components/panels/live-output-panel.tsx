@@ -22,7 +22,6 @@ async function hasOpenBroadcastWindow(): Promise<boolean> {
 
 export function LiveOutputPanel() {
   const isLive = useBroadcastStore((s) => s.isLive)
-  const autoLive = useBroadcastStore((s) => s.autoLive)
   const outputBlanked = useBroadcastStore((s) => s.outputBlanked)
   const liveVerse = useBroadcastStore((s) => s.liveVerse)
   const themes = useBroadcastStore((s) => s.themes)
@@ -31,8 +30,13 @@ export function LiveOutputPanel() {
   const activeTranslationId = useBibleStore((s) => s.activeTranslationId)
 
   const activeTheme = themes.find((t) => t.id === activeThemeId) ?? themes[0]
+  const idleFadeTarget = useSettingsStore((s) => s.idleFadeTarget)
   const presentationOnAir = usePresentationOnAir((s) => s.onAir)
   const presentationShowing = presentationMirrorVisible(presentationOnAir, isLive)
+  // The mirror is "faded out" whenever the real output is — idle fade or
+  // operator blank (videos ignore the blank; see presentation-broadcast).
+  const blankHidesContent = outputBlanked && presentationOnAir?.kind !== "video"
+  const slideHiddenByBlank = outputBlanked && presentationOnAir?.kind === "slide"
 
   // The live output renders only what was explicitly presented — it no longer
   // follows the preview selection, so detections can't override the operator.
@@ -41,6 +45,7 @@ export function LiveOutputPanel() {
   // Mirror the broadcast output's idle fade in the in-app preview.
   const [faded, setFaded] = useState(false)
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const fadedOut = (faded && !presentationShowing) || blankHidesContent
 
   useEffect(() => {
     if (idleTimerRef.current) {
@@ -128,25 +133,10 @@ export function LiveOutputPanel() {
             className="data-[state=checked]:bg-amber-500"
           />
         </label>
-        <label
-          className="flex items-center gap-2"
-          title="When on, detected verses are presented to the live display automatically. Turn off for manual control."
-        >
-          <span
-            className={cn(
-              "text-[0.625rem] font-medium uppercase tracking-wider transition-colors",
-              autoLive ? "text-foreground" : "text-muted-foreground"
-            )}
-          >
-            Auto
-          </span>
-          <Switch
-            checked={autoLive}
-            onCheckedChange={(checked) =>
-              useBroadcastStore.getState().setAutoLive(checked)
-            }
-          />
-        </label>
+        {/* Auto (auto-present detected verses) lives on the transcript
+            panel next to Start/Stop transcribing — it only affects
+            scripture detection, so it sits with the transcription
+            controls. */}
         <label className="ml-2 flex items-center gap-2">
           <span
             className={cn(
@@ -168,18 +158,22 @@ export function LiveOutputPanel() {
         className={cn(
           "flex min-h-0 flex-1 items-center justify-center p-3 transition-opacity duration-700",
           !isLive && !presentationShowing && "opacity-40",
-          faded && !presentationShowing && "opacity-0",
-          // Mirror the operator blank: outputs fade to background only —
-          // videos ignore the blank, so their mirror stays visible.
-          outputBlanked && presentationOnAir?.kind !== "video" && "opacity-0"
+          // Faded / blanked with a black idle target: the whole mirror
+          // fades out. With the theme target the pane stays visible and
+          // renders the background-only scene below instead. Videos ignore
+          // the blank, so their mirror stays up either way.
+          fadedOut && idleFadeTarget === "black" && "opacity-0"
         )}
       >
         {/* Fork: mirror slides/videos when the presentation channel owns
             the output — CanvasVerse only knows about the verse channel. */}
-        {presentationShowing && presentationOnAir ? (
+        {presentationShowing && presentationOnAir && !slideHiddenByBlank ? (
           <PresentationLiveMirror payload={presentationOnAir} />
         ) : (
-          <CanvasVerse theme={activeTheme} verse={verseData} />
+          <CanvasVerse
+            theme={activeTheme}
+            verse={fadedOut && idleFadeTarget === "theme" ? null : verseData}
+          />
         )}
       </div>
     </div>

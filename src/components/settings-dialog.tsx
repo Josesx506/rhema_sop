@@ -46,7 +46,7 @@ import {
 } from "lucide-react"
 import { LevelMeter } from "@/components/ui/level-meter"
 import { useAudioTest } from "@/hooks/use-audio-test"
-import { useSettingsStore } from "@/stores"
+import { useSettingsStore, useBroadcastStore } from "@/stores"
 import { useTranscriptStore } from "@/stores/transcript-store"
 import { useTutorialStore } from "@/stores/tutorial-store"
 import { useSettingsDialogStore } from "@/lib/settings-dialog"
@@ -368,6 +368,8 @@ function DisplayModeSection() {
     setConfidenceThreshold,
     idleFadeMs,
     setIdleFadeMs,
+    idleFadeTarget,
+    setIdleFadeTarget,
   } = useSettingsStore()
 
   const thresholdPercent = Math.round(confidenceThreshold * 100)
@@ -467,7 +469,36 @@ function DisplayModeSection() {
         <p className="text-[0.625rem] text-muted-foreground">
           If the sermon stops relating to the displayed verse — no
           re-detection or mention of it, and nothing new presented — for this
-          long, the broadcast display fades back to black on its own.
+          long, the broadcast display fades out on its own.
+        </p>
+      </div>
+
+      {/* Fork: what the faded display shows. Applies to the idle fade and
+          the Blank toggle alike; off-air always goes black. */}
+      <div className="flex flex-col gap-2">
+        <label className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+          Idle Display
+        </label>
+        <Select
+          value={idleFadeTarget}
+          onValueChange={(v) => {
+            setIdleFadeTarget(v as "black" | "theme")
+            // Re-emit so an already-faded/blanked output picks the new
+            // look up immediately instead of on the next present.
+            useBroadcastStore.getState().syncBroadcastOutput()
+          }}
+        >
+          <SelectTrigger className="h-8 text-xs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="black">Black screen</SelectItem>
+            <SelectItem value="theme">Theme background</SelectItem>
+          </SelectContent>
+        </Select>
+        <p className="text-[0.625rem] text-muted-foreground">
+          What the display fades to when idle or blanked: full black, or the
+          active theme&apos;s background and logo with only the text removed.
         </p>
       </div>
     </div>

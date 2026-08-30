@@ -36,6 +36,9 @@ interface BroadcastPayload {
   theme: BroadcastTheme
   verse: VerseRenderData | null
   idleFadeMs?: number
+  /** Fork: what a faded-out output shows — full black (default) or the
+   * theme background + logo with just the text faded away. */
+  idleFadeTarget?: "black" | "theme"
 }
 
 /** Fallback if a payload arrives without idleFadeMs (older event shape). Kept
@@ -108,6 +111,16 @@ function BroadcastCanvas() {
     ctx.globalAlpha = 1
     ctx.fillStyle = "#000"
     ctx.fillRect(0, 0, canvas.width, canvas.height)
+    // Fork fade-to-theme: keep the background + logo solid underneath so
+    // the fade only takes the text away. The verse pass then repaints the
+    // identical background over itself, leaving just the text at fade
+    // alpha. Skipped at alpha 1 — the verse pass alone is the same frame.
+    if (data.idleFadeTarget === "theme" && alphaRef.current < 1) {
+      renderVerse(ctx, theme, null, {
+        scale: 1,
+        imageCache: themeImageCache(),
+      })
+    }
     ctx.globalAlpha = alphaRef.current
 
     const result = renderVerse(ctx, theme, verse, {

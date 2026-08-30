@@ -3,6 +3,10 @@ import { load, type Store } from "@tauri-apps/plugin-store"
 
 type SttProvider = "deepgram" | "whisper"
 
+/** Fork: what the output shows when faded out (idle fade or operator
+ * blank) — full black, or the active theme's background + logo. */
+export type IdleFadeTarget = "black" | "theme"
+
 interface SettingsState {
   deepgramApiKey: string | null
   openaiApiKey: string | null
@@ -13,6 +17,7 @@ interface SettingsState {
   confidenceThreshold: number
   cooldownMs: number
   idleFadeMs: number
+  idleFadeTarget: IdleFadeTarget
   onboardingComplete: boolean
   sttProvider: SttProvider
 
@@ -25,6 +30,7 @@ interface SettingsState {
   setConfidenceThreshold: (threshold: number) => void
   setCooldownMs: (ms: number) => void
   setIdleFadeMs: (ms: number) => void
+  setIdleFadeTarget: (target: IdleFadeTarget) => void
   setOnboardingComplete: (complete: boolean) => void
   setSttProvider: (provider: SttProvider) => void
 }
@@ -39,6 +45,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   confidenceThreshold: 0.8,
   cooldownMs: 2500,
   idleFadeMs: 30_000,
+  idleFadeTarget: "black",
   onboardingComplete: false,
   sttProvider: "deepgram",
 
@@ -51,6 +58,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   setConfidenceThreshold: (confidenceThreshold) => set({ confidenceThreshold }),
   setCooldownMs: (cooldownMs) => set({ cooldownMs }),
   setIdleFadeMs: (idleFadeMs) => set({ idleFadeMs }),
+  setIdleFadeTarget: (idleFadeTarget) => set({ idleFadeTarget }),
   setOnboardingComplete: (onboardingComplete) => set({ onboardingComplete }),
   setSttProvider: (sttProvider) => set({ sttProvider }),
 }))
@@ -65,6 +73,7 @@ const PERSISTED_KEYS = [
   "confidenceThreshold",
   "cooldownMs",
   "idleFadeMs",
+  "idleFadeTarget",
   "onboardingComplete",
   "sttProvider",
 ] as const satisfies readonly (keyof SettingsState)[]

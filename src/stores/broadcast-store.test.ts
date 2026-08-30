@@ -73,6 +73,29 @@ describe("broadcast store sync", () => {
     )
   })
 
+  it("emits the idle-fade target while live and forces black off-air", async () => {
+    const { useBroadcastStore } = await import("./broadcast-store")
+    const { useSettingsStore } = await import("./settings-store")
+    useSettingsStore.setState({ idleFadeTarget: "theme" })
+    useBroadcastStore.setState({ isLive: true, liveVerse: sampleLiveVerse })
+
+    emitToMock.mockClear()
+    useBroadcastStore.getState().syncBroadcastOutput()
+    expect(emitToMock).toHaveBeenCalledWith(
+      "broadcast-main",
+      "broadcast:verse-update",
+      expect.objectContaining({ idleFadeTarget: "theme" }),
+    )
+
+    emitToMock.mockClear()
+    useBroadcastStore.getState().setLive(false)
+    expect(emitToMock).toHaveBeenCalledWith(
+      "broadcast-main",
+      "broadcast:verse-update",
+      expect.objectContaining({ idleFadeTarget: "black", verse: null }),
+    )
+  })
+
   it("syncBroadcastOutput fans out to every output with its own theme", async () => {
     const { useBroadcastStore } = await import("./broadcast-store")
     const state = useBroadcastStore.getState()
