@@ -27,6 +27,13 @@ Fork releases of Rhema (rhema_sop). Dates are release dates.
   faded-out display shows — the theme background and logo (default) or a
   full black screen. Applies to both the idle fade and the Blank toggle;
   turning Live off always goes to black.
+- **In-app Whisper model downloader** (Settings → Speech Recognition,
+  Whisper provider): pick a model size (Tiny 42 MB → Large v3 Turbo
+  834 MB) and download it straight from the official whisper.cpp
+  repository with a progress bar — no bun install or manual file
+  placement on a fresh machine. Models land in app-data and survive app
+  updates; downloads can be cancelled and app-data models removed. The
+  previously hardcoded model filename is now a setting.
 
 ### Changed
 

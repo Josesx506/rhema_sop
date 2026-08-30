@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core"
 
 import { Button } from "@/components/ui/button"
 import { DiagnosticsSection } from "@/components/settings/diagnostics-section"
+import { WhisperModelSection } from "@/components/settings/whisper-model-section"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import {
@@ -306,8 +307,9 @@ function SpeechSection() {
                 Local (Whisper)
               </span>
               <p className="text-[0.625rem] leading-relaxed text-muted-foreground">
-                Runs Whisper large-v3-turbo locally on your device. Fully
-                offline, no API key needed. Audio never leaves your machine.
+                Runs a Whisper model locally on your device — choose the size
+                below. Fully offline, no API key needed. Audio never leaves
+                your machine.
               </p>
             </div>
           </label>
@@ -352,6 +354,9 @@ function SpeechSection() {
           </p>
         </div>
       )}
+
+      {/* Fork: Whisper model picker + in-app downloader */}
+      {sttProvider === "whisper" && <WhisperModelSection />}
     </div>
   )
 }

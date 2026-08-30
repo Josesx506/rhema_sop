@@ -53,6 +53,7 @@ pub async fn start_transcription(
     device_id: Option<String>,
     gain: Option<f32>,
     provider: Option<String>,
+    whisper_model: Option<String>,
 ) -> Result<(), String> {
     // ── 1. Guard: already running? ──────────────────────────────────────
     let (stt_active, audio_active, audio_test_active) = {
@@ -81,35 +82,20 @@ pub async fn start_transcription(
     let stt_provider: Box<dyn SttProvider> = match provider_name {
         #[cfg(feature = "whisper")]
         "whisper" => {
-            // Resolve bundled Whisper model path.
-            // Dev: {CARGO_MANIFEST_DIR}/../models/whisper/ggml-large-v3-turbo-q8_0.bin
-            // Prod: resource_dir()/models/whisper/ggml-large-v3-turbo-q8_0.bin
-            let model_filename = "ggml-large-v3-turbo-q8_0.bin";
-            let model_path = {
-                let base_dir =
-                    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
-                let dev_path = base_dir
-                    .join("models")
-                    .join("whisper")
-                    .join(model_filename);
-                if dev_path.exists() {
-                    dev_path
-                } else {
-                    app.path()
-                        .resource_dir()
-                        .map(|p| {
-                            p.join("models")
-                                .join("whisper")
-                                .join(model_filename)
-                        })
-                        .ok()
-                        .filter(|p| p.exists())
-                        .ok_or_else(|| {
-                            "Whisper model not found. Run: bun run download:whisper"
-                                .to_string()
-                        })?
-                }
-            };
+            // Fork: model file is selectable in Settings; resolution checks
+            // the dev tree, the app-data download location, then bundled
+            // resources — see commands::whisper_model::resolve_whisper_model.
+            let model_filename = whisper_model
+                .as_deref()
+                .unwrap_or("ggml-large-v3-turbo-q8_0.bin");
+            let (model_path, model_source) =
+                super::whisper_model::resolve_whisper_model(&app, model_filename)
+                    .ok_or_else(|| {
+                        format!(
+                            "Whisper model {model_filename} not found. Download it in Settings → Speech Recognition."
+                        )
+                    })?;
+            log::info!("[STT-whisper] Model resolved from {model_source}");
 
             let parallelism = std::thread::available_parallelism()
                 .map_or(4, usize::from);

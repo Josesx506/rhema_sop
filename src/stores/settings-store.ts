@@ -20,6 +20,8 @@ interface SettingsState {
   idleFadeTarget: IdleFadeTarget
   onboardingComplete: boolean
   sttProvider: SttProvider
+  /** Fork: ggml model file used by the local Whisper provider. */
+  whisperModel: string
 
   setDeepgramApiKey: (key: string | null) => void
   setOpenaiApiKey: (key: string | null) => void
@@ -33,6 +35,7 @@ interface SettingsState {
   setIdleFadeTarget: (target: IdleFadeTarget) => void
   setOnboardingComplete: (complete: boolean) => void
   setSttProvider: (provider: SttProvider) => void
+  setWhisperModel: (model: string) => void
 }
 
 export const useSettingsStore = create<SettingsState>((set) => ({
@@ -48,6 +51,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   idleFadeTarget: "theme",
   onboardingComplete: false,
   sttProvider: "deepgram",
+  whisperModel: "ggml-large-v3-turbo-q8_0.bin",
 
   setDeepgramApiKey: (deepgramApiKey) => set({ deepgramApiKey }),
   setOpenaiApiKey: (openaiApiKey) => set({ openaiApiKey }),
@@ -61,6 +65,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   setIdleFadeTarget: (idleFadeTarget) => set({ idleFadeTarget }),
   setOnboardingComplete: (onboardingComplete) => set({ onboardingComplete }),
   setSttProvider: (sttProvider) => set({ sttProvider }),
+  setWhisperModel: (whisperModel) => set({ whisperModel }),
 }))
 
 const PERSISTED_KEYS = [
@@ -76,6 +81,7 @@ const PERSISTED_KEYS = [
   "idleFadeTarget",
   "onboardingComplete",
   "sttProvider",
+  "whisperModel",
 ] as const satisfies readonly (keyof SettingsState)[]
 
 let tauriStore: Store | null = null

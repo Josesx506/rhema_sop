@@ -28,15 +28,15 @@ lines with under 60 touched upstream lines.
 
 ## Future features
 
-1. **Spec-aware Whisper model downloader (in-app)** — replaces the manual
-   model download + rename dance that blocked the church PC:
+1. **Benchmark-based Whisper model recommendation** — the downloader +
+   model-size setting SHIPPED in 0.4.1 (Settings → Speech Recognition:
+   curated model picker, streaming download into app-data, cancel/remove;
+   `commands/whisper_model.rs` + `whisper-model-section.tsx`). Remaining
+   future piece:
    - Benchmark, don't guess: fetch the `tiny` model (~40 MB), transcribe a
      bundled ~5 s audio sample, measure real-time factor, extrapolate with
      whisper.cpp's known inter-model speed ratios, and recommend the
      largest model predicted at RTF ≤ ~0.6. Operator can override.
-   - Download with progress + checksum into app-data (not the install
-     dir); Settings gains an **STT model-size setting** so the hardcoded
-     `ggml-large-v3-turbo-q8_0.bin` filename goes away.
    - Surface the measured RTF in diagnostics ("this machine transcribes at
      0.4× real time with small").
 2. **Media loops hybrid** — looping video as the BACKGROUND layer with the
@@ -63,5 +63,8 @@ lines with under 60 touched upstream lines.
   desk. Local Whisper large-v3-turbo measured slower than real time on
   this PC (99% CPU, unbounded transcript backlog); `small` renamed into
   the model slot is the offline fallback until feature 1 lands.
-- Whisper model path in prod: `<install dir>\models\whisper\
-  ggml-large-v3-turbo-q8_0.bin` (filename currently hardcoded).
+- Whisper model resolution (since 0.4.1): dev tree →
+  `<app-data>\models\whisper\<selected file>` (in-app download) →
+  `<install dir>\models\whisper\<selected file>` (legacy manual
+  placement). Model file is a Setting; default remains
+  `ggml-large-v3-turbo-q8_0.bin`.

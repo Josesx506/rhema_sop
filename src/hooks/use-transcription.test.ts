@@ -54,6 +54,7 @@ describe("use-transcription", () => {
         deviceId: "dev-42",
         gain: 1.5,
         provider: "whisper",
+        whisperModel: "ggml-large-v3-turbo-q8_0.bin",
       })
     })
 
