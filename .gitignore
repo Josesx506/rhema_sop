@@ -63,3 +63,5 @@ bench-results/
 *.cer
 *.crt
 *.pfx
+# Local-only files (certs, ProPresenter exports) — never commit
+local/
