@@ -51,6 +51,7 @@
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
     "fabric": "^7.4.0",
+    "fflate": "^0.8.3",
     "fuse.js": "^7.5.0",
     "lucide-react": "^1.28.0",
     "pdfjs-dist": "^6.2.108",

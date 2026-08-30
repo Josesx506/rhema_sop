@@ -35,6 +35,7 @@ import { cn } from "@/lib/utils"
 import { hydrateSongCatalog, matchesSearch, useSongStore } from "@/stores/song-store"
 import { exportCatalog, importCatalogFile } from "@/lib/songs/catalog-file"
 import { parseOpenLyrics, parseOpenSong, parsePlainText, type ParsedSong } from "@/lib/songs/import-parsers"
+import { importProBundleFile } from "@/lib/songs/probundle-import"
 import { SongEditorDialog } from "@/components/songs/song-editor-dialog"
 import type { Song } from "@/types/songs"
 
@@ -172,6 +173,24 @@ export function SongCatalogPanel() {
     })()
   }
 
+  const handleProBundleImport = () => {
+    void (async () => {
+      try {
+        const result = await importProBundleFile()
+        if (!result) return
+        useSongStore.getState().importSongs(result.songs)
+        const extras: string[] = []
+        if (result.skipped.length) extras.push(`${result.skipped.length} non-song decks`)
+        if (result.duplicates.length) extras.push(`${result.duplicates.length} duplicates`)
+        toast.success(`Imported ${result.songs.length} song${result.songs.length === 1 ? "" : "s"}`, {
+          description: extras.length ? `Skipped ${extras.join(", ")}` : undefined,
+        })
+      } catch (err) {
+        toast.error("Import failed", { description: String(err instanceof Error ? err.message : err) })
+      }
+    })()
+  }
+
   const handleExport = () => {
     void (async () => {
       try {
@@ -218,6 +237,7 @@ export function SongCatalogPanel() {
                 OpenLyrics XML file
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => handleFileImport("opensong")}>OpenSong file</DropdownMenuItem>
+              <DropdownMenuItem onClick={handleProBundleImport}>ProPresenter bundle</DropdownMenuItem>
               <DropdownMenuItem onClick={handleCatalogImport}>Catalog JSON</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
