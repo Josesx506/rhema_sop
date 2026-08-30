@@ -179,9 +179,15 @@ export function wrapText(
 }
 
 export interface VerseInlineHandle {
-  prepared: PreparedRichInline
-  /** Per-item kind, indexed by RichInlineFragment.itemIndex. */
-  kinds: ("word" | "verseNum")[]
+  /** One rich-inline flow per hard-break paragraph: segments marked
+   * breakAfter (song lyric lines) end a flow so their authored line breaks
+   * survive wrapping. Scripture segments never set it, so verses stay a
+   * single flow exactly as before. */
+  flows: {
+    prepared: PreparedRichInline
+    /** Per-item kind, indexed by RichInlineFragment.itemIndex. */
+    kinds: ("word" | "verseNum")[]
+  }[]
   wordFont: string
   verseNumFont: string
 }
@@ -208,8 +214,15 @@ export function prepareVerseInline(
   const verseNumFont = `${vt.fontWeight} ${verseNumFontSize}px "${vt.fontFamily}", serif`
   const letterSpacing = vt.letterSpacing > 0 ? vt.letterSpacing : undefined
 
-  const items: RichInlineItem[] = []
-  const kinds: ("word" | "verseNum")[] = []
+  const flows: VerseInlineHandle["flows"] = []
+  let items: RichInlineItem[] = []
+  let kinds: ("word" | "verseNum")[] = []
+  const flushFlow = () => {
+    if (!items.length) return
+    flows.push({ prepared: prepareRichInline(items), kinds })
+    items = []
+    kinds = []
+  }
   for (const segment of verse.segments) {
     if (vn.visible && segment.verseNumber !== undefined) {
       items.push({
@@ -225,20 +238,40 @@ export function prepareVerseInline(
       items.push({ text: `${text} `, font: wordFont, letterSpacing })
       kinds.push("word")
     }
+    if (segment.breakAfter) flushFlow()
   }
-  if (!items.length) return null
+  flushFlow()
+  if (!flows.length) return null
 
-  return { prepared: prepareRichInline(items), kinds, wordFont, verseNumFont }
+  return { flows, wordFont, verseNumFont }
+}
+
+/** One laid-out line plus the flow context needed to draw and justify it. */
+interface VerseLayoutLine {
+  line: RichInlineLine
+  kinds: ("word" | "verseNum")[]
+  /** Last line of its paragraph — never stretched by justify. */
+  isParagraphEnd: boolean
 }
 
 function layoutVerseLines(
   handle: VerseInlineHandle,
   maxWidth: number
-): RichInlineLine[] {
-  const lines: RichInlineLine[] = []
-  walkRichInlineLineRanges(handle.prepared, Math.max(1, maxWidth), (range) => {
-    lines.push(materializeRichInlineLineRange(handle.prepared, range))
-  })
+): VerseLayoutLine[] {
+  const lines: VerseLayoutLine[] = []
+  for (const flow of handle.flows) {
+    const flowLines: RichInlineLine[] = []
+    walkRichInlineLineRanges(flow.prepared, Math.max(1, maxWidth), (range) => {
+      flowLines.push(materializeRichInlineLineRange(flow.prepared, range))
+    })
+    for (const [i, line] of flowLines.entries()) {
+      lines.push({
+        line,
+        kinds: flow.kinds,
+        isParagraphEnd: i === flowLines.length - 1,
+      })
+    }
+  }
   return lines
 }
 
@@ -837,11 +870,9 @@ function drawVerseText(
   }
 
   let currentY = startY
-  for (const [index, line] of lines.entries()) {
+  for (const { line, kinds, isParagraphEnd } of lines) {
     const isJustifiedLine =
-      verseAlign === "justify" &&
-      index < lines.length - 1 &&
-      line.fragments.length > 1
+      verseAlign === "justify" && !isParagraphEnd && line.fragments.length > 1
 
     let extraGap = 0
     let lineStartX = textRectX
@@ -858,12 +889,7 @@ function drawVerseText(
     let cursorX = lineStartX
     for (const [i, fragment] of line.fragments.entries()) {
       cursorX += fragment.gapBefore + (i > 0 ? extraGap : 0)
-      drawFragment(
-        fragment.text,
-        handle.kinds[fragment.itemIndex],
-        cursorX,
-        currentY
-      )
+      drawFragment(fragment.text, kinds[fragment.itemIndex], cursorX, currentY)
       cursorX += fragment.occupiedWidth
     }
     drawTextDecorationLine(
@@ -1080,13 +1106,17 @@ export function measureVerseHeight(
   if (!handle) {
     return { height: lineHeightPx, maxLineWidth: 1 }
   }
-  const stats = measureRichInlineStats(handle.prepared, Math.max(1, textRectWidth))
+  let lineCount = 0
+  let widestLine = 0
+  for (const flow of handle.flows) {
+    const stats = measureRichInlineStats(flow.prepared, Math.max(1, textRectWidth))
+    lineCount += stats.lineCount
+    widestLine = Math.max(widestLine, stats.maxLineWidth)
+  }
   const maxLineWidth =
-    verseAlign === "justify" && stats.lineCount > 1
-      ? textRectWidth
-      : stats.maxLineWidth
+    verseAlign === "justify" && lineCount > 1 ? textRectWidth : widestLine
   return {
-    height: Math.max(1, stats.lineCount) * lineHeightPx,
+    height: Math.max(1, lineCount) * lineHeightPx,
     maxLineWidth: Math.max(1, maxLineWidth),
   }
 }

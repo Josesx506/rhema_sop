@@ -15,7 +15,7 @@ import type { SongBlock } from "@/types/songs"
 export function blockToRenderData(songTitle: string, block: SongBlock): VerseRenderData {
   return {
     reference: "",
-    segments: block.lines.map((text) => ({ text })),
+    segments: block.lines.map((text) => ({ text, breakAfter: true })),
     noAutoFade: true,
     footerLabel: songTitle,
   }

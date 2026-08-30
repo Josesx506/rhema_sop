@@ -1,6 +1,10 @@
 export interface VerseSegment {
   verseNumber?: number
   text: string
+  /** Fork: hard line break after this segment (song lyric lines keep their
+   * authored breaks). Absent = segments flow and wrap as one paragraph
+   * (scripture prose). */
+  breakAfter?: boolean
 }
 
 export interface VerseRenderData {

@@ -253,7 +253,7 @@ describe("song store presentation", () => {
     expect(setLiveVerseMock).toHaveBeenCalledWith(
       expect.objectContaining({
         footerLabel: "Amazing Grace",
-        segments: [{ text: "sing" }],
+        segments: [{ text: "sing", breakAfter: true }],
         noAutoFade: true,
       })
     )
@@ -292,36 +292,36 @@ describe("song store presentation", () => {
     // Starting with no active block, next() should present the very first block.
     useSongStore.getState().nextBlock()
     expect(setLiveVerseMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({ footerLabel: "Song A", segments: [{ text: "a1" }] })
+      expect.objectContaining({ footerLabel: "Song A", segments: [{ text: "a1", breakAfter: true }] })
     )
 
     useSongStore.getState().nextBlock()
     expect(setLiveVerseMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({ footerLabel: "Song A", segments: [{ text: "a2" }] })
+      expect.objectContaining({ footerLabel: "Song A", segments: [{ text: "a2", breakAfter: true }] })
     )
 
     // Crosses from song A's last block into song B's first block.
     useSongStore.getState().nextBlock()
     expect(setLiveVerseMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({ footerLabel: "Song B", segments: [{ text: "b1" }] })
+      expect.objectContaining({ footerLabel: "Song B", segments: [{ text: "b1", breakAfter: true }] })
     )
 
     // Already at the last block overall — clamps, does not throw or wrap.
     useSongStore.getState().nextBlock()
     expect(setLiveVerseMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({ footerLabel: "Song B", segments: [{ text: "b1" }] })
+      expect.objectContaining({ footerLabel: "Song B", segments: [{ text: "b1", breakAfter: true }] })
     )
 
     // Step back across the entry boundary.
     useSongStore.getState().prevBlock()
     expect(setLiveVerseMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({ footerLabel: "Song A", segments: [{ text: "a2" }] })
+      expect.objectContaining({ footerLabel: "Song A", segments: [{ text: "a2", breakAfter: true }] })
     )
 
     useSongStore.getState().prevBlock()
     useSongStore.getState().prevBlock()
     expect(setLiveVerseMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({ footerLabel: "Song A", segments: [{ text: "a1" }] })
+      expect.objectContaining({ footerLabel: "Song A", segments: [{ text: "a1", breakAfter: true }] })
     )
   })
 
@@ -485,7 +485,7 @@ describe("song store preview selection", () => {
 
     expect(useSongStore.getState().activeBlockId).toBe(entry.blocks[1].id)
     expect(setLiveVerseMock).toHaveBeenCalledWith(
-      expect.objectContaining({ footerLabel: "Song A", segments: [{ text: "line a" }, { text: "line b" }] })
+      expect.objectContaining({ footerLabel: "Song A", segments: [{ text: "line a", breakAfter: true }, { text: "line b", breakAfter: true }] })
     )
   })
 

@@ -23,7 +23,10 @@ describe("blockToRenderData", () => {
 
   it("maps each lyric line to a segment with just text", () => {
     const data = blockToRenderData("Amazing Grace", makeBlock({ lines: ["line one", "line two"] }))
-    expect(data.segments).toEqual([{ text: "line one" }, { text: "line two" }])
+    expect(data.segments).toEqual([
+      { text: "line one", breakAfter: true },
+      { text: "line two", breakAfter: true },
+    ])
   })
 
   it("always sets noAutoFade so lyrics don't fade mid-song", () => {
