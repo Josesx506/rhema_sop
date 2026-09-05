@@ -2,7 +2,7 @@
 
 Fork releases of Rhema (rhema_sop). Dates are release dates.
 
-## Unreleased
+## 0.4.2 — 2026-09-05
 
 ### Added
 
