@@ -125,18 +125,35 @@ describe("seedFreeBoxesFromMetrics", () => {
     verseRect: { x: 300, y: 300, width: 900, height: 400 },
   } as VerseLayoutMetrics
 
-  it("converts element rects to percent boxes that tightly wrap the content", () => {
+  it("spans the text area instead of hugging the sample text", () => {
     const seeded = seedFreeBoxesFromMetrics(metrics, {
       width: 1920,
       height: 1080,
     })
     expect(seeded).toEqual({
-      referenceBox: { x: 26.04, y: 18.51, width: 20.84, height: 6.67 },
-      verseBox: { x: 15.62, y: 27.77, width: 46.88, height: 37.04 },
+      // Full text-area width, the reference's own single-line band.
+      referenceBox: { x: 10, y: 18.51, width: 80, height: 6.67 },
+      // Top-aligned verse keeps its top edge and grows to the text-area floor.
+      verseBox: { x: 10, y: 27.77, width: 80, height: 62.23 },
     })
   })
 
-  it("never rounds a box smaller than its source rect", () => {
+  it("grows a middle-aligned verse box symmetrically so the text stays put", () => {
+    const middleMetrics = {
+      ...metrics,
+      scaledTheme: { verseText: { verticalAlign: "middle" } },
+    } as unknown as VerseLayoutMetrics
+    const seeded = seedFreeBoxesFromMetrics(middleMetrics, {
+      width: 1920,
+      height: 1080,
+    })!
+    const boxTop = (seeded.verseBox.y / 100) * 1080
+    const boxCentre = boxTop + (seeded.verseBox.height / 100) * 1080 / 2
+    const rectCentre = metrics.verseRect!.y + metrics.verseRect!.height / 2
+    expect(boxCentre).toBeCloseTo(rectCentre, 0)
+  })
+
+  it("never seeds a box smaller than its source rect", () => {
     const seeded = seedFreeBoxesFromMetrics(metrics, {
       width: 1920,
       height: 1080,
@@ -147,6 +164,15 @@ describe("seedFreeBoxesFromMetrics", () => {
     expect((seeded.verseBox.height / 100) * 1080).toBeGreaterThanOrEqual(
       metrics.verseRect!.height
     )
+  })
+
+  it("keeps the verse box clear of the reference band", () => {
+    const seeded = seedFreeBoxesFromMetrics(metrics, {
+      width: 1920,
+      height: 1080,
+    })!
+    const refBottom = seeded.referenceBox.y + seeded.referenceBox.height
+    expect(seeded.verseBox.y).toBeGreaterThanOrEqual(refBottom)
   })
 
   it("returns null when an element rect is missing", () => {

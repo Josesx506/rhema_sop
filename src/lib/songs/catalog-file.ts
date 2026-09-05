@@ -53,21 +53,27 @@ export async function importCatalogFile(): Promise<Song[] | null> {
     throw new Error("Invalid catalog file: not a Rhema song catalog export")
   }
 
-  const now = Date.now()
-  return data.songs.map((song) => {
-    const sectionIdMap = new Map<string, string>()
-    const sections = song.sections.map((section) => {
-      const newId = crypto.randomUUID()
-      sectionIdMap.set(section.id, newId)
-      return { ...section, id: newId }
-    })
-    return {
-      ...song,
-      id: crypto.randomUUID(),
-      sections,
-      arrangement: song.arrangement.map((id) => sectionIdMap.get(id) ?? id),
-      createdAt: now,
-      updatedAt: now,
-    }
+  return data.songs.map((song) => cloneSongWithFreshIds(song))
+}
+
+/**
+ * Copy a song with a fresh song id and fresh section ids (the arrangement is
+ * remapped to match), so importing it can never collide with — or silently
+ * overwrite — anything already in the catalog.
+ */
+export function cloneSongWithFreshIds(song: Song, now = Date.now()): Song {
+  const sectionIdMap = new Map<string, string>()
+  const sections = song.sections.map((section) => {
+    const newId = crypto.randomUUID()
+    sectionIdMap.set(section.id, newId)
+    return { ...section, id: newId }
   })
+  return {
+    ...song,
+    id: crypto.randomUUID(),
+    sections,
+    arrangement: song.arrangement.map((id) => sectionIdMap.get(id) ?? id),
+    createdAt: now,
+    updatedAt: now,
+  }
 }

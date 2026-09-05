@@ -5,6 +5,7 @@ import type { Song, SetlistEntry, SongBlock } from "@/types/songs"
 import { expandSong } from "@/lib/songs/block-expansion"
 import { blockToRenderData } from "@/lib/songs/song-to-render-data"
 import { SAMPLE_SONG } from "@/lib/songs/sample-song"
+import { resolveSetlist, type SetlistExport } from "@/lib/songs/setlist-file"
 import { useBroadcastStore } from "@/stores/broadcast-store"
 
 interface FlatBlockRef {
@@ -40,6 +41,9 @@ interface SongState {
   removeEntry: (entryId: string) => void
   clearSetlist: () => void
   reorderEntries: (fromIndex: number, toIndex: number) => void
+  /** Replace the setlist with a saved one, adding any songs the catalog is
+   * missing. Returns a summary for the operator toast. */
+  loadSetlist: (payload: SetlistExport) => { loaded: number; added: number; missing: string[] }
   /** When false (default), adding a song already in the setlist is a no-op
    * — one entry per song. Toggle on for playlists that repeat a song. */
   allowSetlistDuplicates: boolean
@@ -195,6 +199,27 @@ export const useSongStore = create<SongState>((set, get) => ({
       next.splice(toIndex, 0, moved)
       return { setlist: next }
     }),
+
+  loadSetlist: (payload) => {
+    const { songs, added, missing } = resolveSetlist(payload, get().songs)
+    const entries: SetlistEntry[] = songs.map((song) => ({
+      id: crypto.randomUUID(),
+      songId: song.id,
+      title: song.title,
+      // Blocks are re-expanded rather than restored from the file, so a song
+      // edited since the setlist was saved presents its current arrangement.
+      blocks: expandSong(song),
+    }))
+    set((s) => ({
+      songs: added.length > 0 ? [...s.songs, ...added] : s.songs,
+      setlist: entries,
+      activeBlockId: null,
+      collapsedEntryIds: {},
+      previewEntryId: entries[0]?.id ?? null,
+      previewBlockId: entries[0]?.blocks[0]?.id ?? null,
+    }))
+    return { loaded: entries.length, added: added.length, missing }
+  },
 
   presentBlock: (entryId, blockId) => {
     const entry = get().setlist.find((e) => e.id === entryId)

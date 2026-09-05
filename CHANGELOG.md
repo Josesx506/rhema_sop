@@ -2,6 +2,33 @@
 
 Fork releases of Rhema (rhema_sop). Dates are release dates.
 
+## Unreleased
+
+### Added
+
+- **Save / open a setlist**: the setlist header's ⋮ menu writes the arranged
+  service order to a JSON file and reads it back, so a Sunday order built
+  once can be reopened instead of re-added song by song. The file embeds the
+  songs it references, so it also opens on a machine whose catalog is missing
+  them (those are added to the catalog); songs are matched by catalog id
+  first, then by title + artist, so a re-imported catalog still resolves.
+  Blocks are re-expanded from the catalog on load, so a song edited since the
+  file was saved presents its current arrangement. Clear setlist moved into
+  the same menu.
+- **Verse / Song preview switch** in the theme designer toolbar: the canvas
+  can lay out a six-line song block instead of the one-line sample verse, so
+  a layout can be checked against lyrics before it goes on air.
+
+### Fixed
+
+- Detaching a theme into free positioning (dragging a frame on the designer
+  canvas, or the "Free positioning" checkbox) no longer shrinks text on the
+  output. The seeded boxes hugged the one-line sample verse, and free mode
+  auto-fits content into its box — so every real verse, and every multi-line
+  song block hardest, was squeezed into roughly one line's worth of height.
+  Seeded boxes now span the theme's text area while keeping the text exactly
+  where it was.
+
 ## 0.4.1 — 2026-08-29
 
 ### Added

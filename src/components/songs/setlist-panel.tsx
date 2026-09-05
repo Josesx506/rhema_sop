@@ -1,8 +1,16 @@
 import { useEffect } from "react"
+import { toast } from "sonner"
 import { PanelHeader } from "@/components/ui/panel-header"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { cn } from "@/lib/utils"
 import {
   ArrowDownIcon,
@@ -12,9 +20,11 @@ import {
   ChevronRightIcon,
   ChevronsDownUpIcon,
   ChevronsUpDownIcon,
+  EllipsisVerticalIcon,
   XIcon,
 } from "lucide-react"
 import { useSongStore } from "@/stores/song-store"
+import { exportSetlistFile, importSetlistFile } from "@/lib/songs/setlist-file"
 import type { SetlistEntry, SongBlock } from "@/types/songs"
 
 function isTypingTarget(target: EventTarget | null): boolean {
@@ -177,6 +187,41 @@ export function SetlistPanel() {
   const allowDuplicates = useSongStore((s) => s.allowSetlistDuplicates)
   const allCollapsed = setlist.length > 0 && setlist.every((e) => collapsedEntryIds[e.id])
 
+  const handleSaveSetlist = () => {
+    void (async () => {
+      try {
+        const { setlist: current, songs: catalog } = useSongStore.getState()
+        if (await exportSetlistFile(current, catalog)) {
+          toast.success(`Saved setlist (${current.length} song${current.length === 1 ? "" : "s"})`)
+        }
+      } catch (err) {
+        toast.error("Could not save setlist", {
+          description: String(err instanceof Error ? err.message : err),
+        })
+      }
+    })()
+  }
+
+  const handleOpenSetlist = () => {
+    void (async () => {
+      try {
+        const payload = await importSetlistFile()
+        if (!payload) return
+        const { loaded, added, missing } = useSongStore.getState().loadSetlist(payload)
+        const notes: string[] = []
+        if (added > 0) notes.push(`${added} song${added === 1 ? "" : "s"} added to the catalog`)
+        if (missing.length > 0) notes.push(`skipped ${missing.join(", ")}`)
+        toast.success(`Loaded setlist (${loaded} song${loaded === 1 ? "" : "s"})`, {
+          description: notes.length ? notes.join(" · ") : undefined,
+        })
+      } catch (err) {
+        toast.error("Could not open setlist", {
+          description: String(err instanceof Error ? err.message : err),
+        })
+      }
+    })()
+  }
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (isTypingTarget(e.target)) return
@@ -233,12 +278,27 @@ export function SetlistPanel() {
           <Button variant="ghost" size="icon-xs" title="Next block" onClick={() => useSongStore.getState().nextBlock()}>
             <ChevronRightIcon className="size-3.5" />
           </Button>
-          <button
-            onClick={() => useSongStore.getState().clearSetlist()}
-            className="text-[0.625rem] text-muted-foreground transition-colors hover:text-foreground"
-          >
-            Clear
-          </button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon-xs" title="Setlist file">
+                <EllipsisVerticalIcon className="size-3.5" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-40">
+              <DropdownMenuItem onClick={handleSaveSetlist} disabled={setlist.length === 0}>
+                Save setlist…
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleOpenSetlist}>Open setlist…</DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                variant="destructive"
+                disabled={setlist.length === 0}
+                onClick={() => useSongStore.getState().clearSetlist()}
+              >
+                Clear setlist
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </PanelHeader>
 

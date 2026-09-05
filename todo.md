@@ -18,6 +18,11 @@ lines with under 60 touched upstream lines.
 - PR branches pushed to the fork, awaiting PRs via the GitHub UI (compare
   links in session notes): `feat/idle-fade-timeout` (idle fade + relevance
   keepalive), `feat/live-output-guards` (live-display safety toasts).
+- Candidate PR: free-mode box seeding (`seedFreeBoxesFromMetrics`). Upstream
+  seeds the boxes tight around the one-line SAMPLE_VERSE, and free mode
+  auto-fits content into its box — so detaching any theme silently shrinks
+  every longer verse (and every song block) on the output. Fixed here by
+  seeding boxes that span the text area while keeping the sample text put.
 - Candidate third PR: the fork-gate on the Pages deploy workflow
   (`if: github.repository == 'openbezal/rhema'`) — courtesy to all forks.
 - Worth reporting to pdf.js: their "legacy" build transpiles syntax but not

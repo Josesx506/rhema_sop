@@ -6,7 +6,14 @@ import {
   renderVerse,
   type VerseLayoutMetrics,
 } from "@/lib/verse-renderer"
-import { seedFreeBoxesFromMetrics, SAMPLE_VERSE } from "@/lib/theme-migrations"
+import { seedFreeBoxesFromMetrics } from "@/lib/theme-migrations"
+// Fork: the canvas previews a scripture verse or a song block (see
+// theme-designer-preview.ts) so lyric layouts can be checked here.
+import {
+  currentPreviewSample,
+  usePreviewSample,
+} from "@/lib/theme-designer-preview"
+import { PreviewSampleToggle } from "@/components/broadcast/preview-sample-toggle"
 import { preloadThemeImages, themeImageCache } from "@/lib/theme-image-cache"
 import { Button } from "@/components/ui/button"
 import {
@@ -301,6 +308,9 @@ export function DesignCanvas() {
     })
   }, [draftTheme])
 
+  // Fork: swapping the preview sample re-lays out the canvas.
+  useEffect(() => usePreviewSample.subscribe(() => resyncLatestTheme()), [resyncLatestTheme])
+
   useEffect(() => {
     const refRegion = objectsRef.current.referenceRegion
     const verseRegion = objectsRef.current.verseRegion
@@ -347,6 +357,7 @@ export function DesignCanvas() {
           <span>Grid</span>
         </div>
         <div className="flex-1" />
+        <PreviewSampleToggle />
         <Button variant="ghost" size="icon-xs" className="text-muted-foreground">
           <SearchIcon className="size-3.5" />
         </Button>
@@ -533,7 +544,7 @@ function renderThemeBitmap(
   const ctx = offscreen.getContext("2d")
   if (!ctx) return { bitmap: offscreen, metrics: null }
 
-  const metrics = renderVerse(ctx, theme, SAMPLE_VERSE, {
+  const metrics = renderVerse(ctx, theme, currentPreviewSample(), {
     imageCache: themeImageCache(),
   })
   if (theme.background.type === "transparent") {

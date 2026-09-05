@@ -127,20 +127,87 @@ export function seedFreeBoxesForTheme(
 }
 
 /**
+ * Grow a seeded element box so it owns real estate instead of hugging one
+ * sample line. Horizontally every box spans the full text area; vertically it
+ * expands away from the text in whichever direction its vertical alignment
+ * keeps the sample anchored, bounded by `bounds`. The sample therefore renders
+ * in exactly the same place after detaching, while longer content (a six-line
+ * chorus, a wrapped verse) still has room instead of being auto-shrunk to fit
+ * a one-line box.
+ */
+function expandBoxToBounds(
+  rect: { x: number; y: number; width: number; height: number },
+  bounds: { x: number; y: number; width: number; height: number },
+  verticalAlign: "top" | "middle" | "bottom"
+): { x: number; y: number; width: number; height: number } {
+  const top = bounds.y
+  const bottom = bounds.y + bounds.height
+  const x = bounds.x
+  const width = Math.max(rect.width, bounds.width)
+
+  if (verticalAlign === "middle") {
+    // Symmetric growth keeps the centre — and therefore centred text — put.
+    const centre = rect.y + rect.height / 2
+    const half = Math.max(rect.height / 2, Math.min(centre - top, bottom - centre))
+    return { x, y: centre - half, width, height: half * 2 }
+  }
+  if (verticalAlign === "bottom") {
+    const bottomEdge = rect.y + rect.height
+    const y = Math.min(rect.y, top)
+    return { x, y, width, height: Math.max(rect.height, bottomEdge - y) }
+  }
+  return { x, y: rect.y, width, height: Math.max(rect.height, bottom - rect.y) }
+}
+
+/**
  * Seed free-mode element boxes from stacked layout metrics (computed at
- * scale 1). Each box tightly wraps its rendered content, so on detach the
- * frame hugs the text and dragging it moves the text 1:1. Line breaks are
- * preserved: greedy wrap at the widest-line width reproduces the same lines.
+ * scale 1). Boxes span the theme's text area rather than hugging the sample
+ * text: in free mode the renderer auto-fits the verse into its box, so a box
+ * cut to one sample line would shrink every real verse — and every multi-line
+ * song block hardest — the moment the theme was detached. Line breaks are
+ * preserved: the sample already wrapped at the text-area width, so re-wrapping
+ * at that same width reproduces the same lines.
  */
 export function seedFreeBoxesFromMetrics(
   metrics: VerseLayoutMetrics,
   resolution: BroadcastTheme["resolution"]
 ): { referenceBox: ElementBox; verseBox: ElementBox } | null {
-  const { referenceRect, verseRect } = metrics
+  const { referenceRect, verseRect, textRect, scaledTheme } = metrics
   if (!referenceRect || !verseRect) return null
   const { width: canvasW, height: canvasH } = resolution
+  const bounds = textRect ?? {
+    x: 0,
+    y: 0,
+    width: canvasW,
+    height: canvasH,
+  }
+
+  // The verse never grows into the reference's band, so the two boxes stay
+  // side by side the way the stacked layout had them.
+  const verseBounds = { ...bounds }
+  if (referenceRect.y + referenceRect.height <= verseRect.y) {
+    const cut = Math.max(bounds.y, referenceRect.y + referenceRect.height)
+    verseBounds.height = Math.max(verseRect.height, bounds.y + bounds.height - cut)
+    verseBounds.y = cut
+  } else if (referenceRect.y >= verseRect.y + verseRect.height) {
+    const cut = Math.min(bounds.y + bounds.height, referenceRect.y)
+    verseBounds.height = Math.max(verseRect.height, cut - bounds.y)
+  }
+
   return {
-    referenceBox: rectToBox(referenceRect, canvasW, canvasH),
-    verseBox: rectToBox(verseRect, canvasW, canvasH),
+    referenceBox: rectToBox(
+      { ...referenceRect, x: bounds.x, width: Math.max(referenceRect.width, bounds.width) },
+      canvasW,
+      canvasH
+    ),
+    verseBox: rectToBox(
+      expandBoxToBounds(
+        verseRect,
+        verseBounds,
+        scaledTheme?.verseText?.verticalAlign ?? "top"
+      ),
+      canvasW,
+      canvasH
+    ),
   }
 }

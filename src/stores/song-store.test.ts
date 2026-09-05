@@ -287,6 +287,73 @@ describe("song store setlist", () => {
   })
 })
 
+describe("song store loadSetlist", () => {
+  beforeEach(() => {
+    vi.resetModules()
+    setLiveVerseMock.mockReset()
+  })
+
+  function exportOf(songs: Song[]) {
+    return {
+      format: "rhema-setlist" as const,
+      version: 1 as const,
+      exportedAt: 0,
+      entries: songs.map((s) => ({ songId: s.id, title: s.title, artist: s.artist })),
+      songs,
+    }
+  }
+
+  it("rebuilds the setlist in the saved order and re-expands blocks from the catalog", async () => {
+    const { useSongStore } = await import("./song-store")
+    const v1 = makeSection({ label: "Verse 1", lines: ["a"] })
+    const c = makeSection({ label: "Chorus", lines: ["b"] })
+    const first = makeSong({ title: "First", sections: [v1, c], arrangement: [v1.id, c.id] })
+    const second = makeSong({ title: "Second", sections: [makeSection()] })
+    useSongStore.setState({ songs: [first, second], setlist: [] })
+
+    const result = useSongStore.getState().loadSetlist(exportOf([second, first]))
+
+    expect(result).toEqual({ loaded: 2, added: 0, missing: [] })
+    const setlist = useSongStore.getState().setlist
+    expect(setlist.map((e) => e.title)).toEqual(["Second", "First"])
+    expect(setlist[1].blocks.map((b) => b.label)).toEqual(["Verse 1", "Chorus"])
+  })
+
+  it("replaces whatever was in the setlist and resets live/preview/collapse state", async () => {
+    const { useSongStore } = await import("./song-store")
+    const stale = makeSong({ title: "Stale", sections: [makeSection()] })
+    const fresh = makeSong({ title: "Fresh", sections: [makeSection()] })
+    useSongStore.setState({ songs: [stale, fresh] })
+    useSongStore.getState().addSongToSetlist(stale.id)
+    const staleEntry = useSongStore.getState().setlist[0]
+    useSongStore.getState().presentBlock(staleEntry.id, staleEntry.blocks[0].id)
+    useSongStore.getState().setAllEntriesCollapsed(true)
+
+    useSongStore.getState().loadSetlist(exportOf([fresh]))
+
+    const state = useSongStore.getState()
+    expect(state.setlist.map((e) => e.title)).toEqual(["Fresh"])
+    expect(state.activeBlockId).toBeNull()
+    expect(state.collapsedEntryIds).toEqual({})
+    // Preview lands on the first block so the operator can start immediately.
+    expect(state.previewEntryId).toBe(state.setlist[0].id)
+    expect(state.previewBlockId).toBe(state.setlist[0].blocks[0].id)
+  })
+
+  it("adds songs the catalog is missing rather than dropping the entry", async () => {
+    const { useSongStore } = await import("./song-store")
+    const known = makeSong({ title: "Known", sections: [makeSection()] })
+    const unknown = makeSong({ title: "Unknown", sections: [makeSection()] })
+    useSongStore.setState({ songs: [known], setlist: [] })
+
+    const result = useSongStore.getState().loadSetlist(exportOf([known, unknown]))
+
+    expect(result.added).toBe(1)
+    expect(useSongStore.getState().songs.map((s) => s.title)).toEqual(["Known", "Unknown"])
+    expect(useSongStore.getState().setlist.map((e) => e.title)).toEqual(["Known", "Unknown"])
+  })
+})
+
 describe("song store presentation", () => {
   beforeEach(() => {
     vi.resetModules()
