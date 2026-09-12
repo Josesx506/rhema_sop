@@ -16,6 +16,14 @@ Fork releases of Rhema (rhema_sop). Dates are release dates.
 
 ### Fixed
 
+- **Video on an NDI feed plays at the configured frame rate.** Nothing pushed
+  a frame while a video ran — the decode pump repainted the canvas but only
+  the 2-second keepalive ever sent anything — so a full-screen NDI output
+  received roughly half a frame per second. Live media now offers a frame on
+  every repaint, throttled to the output's NDI frame rate, and the frame a
+  fade lands on is sent as a burst so receivers can't be left mid-ramp. An
+  overlay output keys out during media, so it pushes nothing extra.
+
 - **NDI outputs fade and blank to transparent.** The idle fade and the Blank
   toggle never ran on an NDI feed at all: the fade was stepped by
   `requestAnimationFrame`, and an NDI output's window is hidden, so the

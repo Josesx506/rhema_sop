@@ -59,14 +59,6 @@ lines with under 60 touched upstream lines.
    whether to ship them (installer bloat) or add an in-app download like
    the Whisper one. FTS/keyword detection works fully without them.
 
-## Known remaining NDI gaps
-
-- A playing video pushes NDI frames only on its start burst and the 2s
-  keepalive — the rVFC pump redraws the canvas but never pushes — so video on
-  an NDI feed arrives as a near-slideshow. Needs an fps-throttled push in the
-  presentation redraw callback (`broadcast-output.tsx`). The idle fade got its
-  own per-tick push in the same subsystem; reuse that shape.
-
 ## Deployment state (church Windows PC)
 
 - v0.4.0 NSIS installer, self-signed cert imported (Trusted Root +

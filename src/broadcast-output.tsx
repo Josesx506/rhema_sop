@@ -92,7 +92,7 @@ function BroadcastCanvas() {
   // loop that a hidden window never runs.
   const fadeRef = useRef({ from: 1, to: 1, start: 0, duration: 0 })
   const fadeTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  const pushNdiFrameRef = useRef<(() => void) | null>(null)
+  const pushNdiFrameThrottledRef = useRef<(() => void) | null>(null)
   const regionCacheRef = useRef<{ theme: BroadcastTheme; rect: VerseLayoutRect } | null>(null)
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // presentedAt of the verse the fade timer was last armed for; undefined =
@@ -239,17 +239,24 @@ function BroadcastCanvas() {
 
   /**
    * Step the fade until it lands, redrawing and — while NDI is running —
-   * pushing each intermediate frame. Reads the target off the ref every tick,
-   * so retargeting mid-fade (a new verse arriving while fading out) reverses
-   * smoothly instead of finishing the stale animation first.
+   * pushing the intermediate frames so receivers see the ramp. Reads the
+   * target off the ref every tick, so retargeting mid-fade (a new verse
+   * arriving while fading out) reverses smoothly instead of finishing the
+   * stale animation first. The frame it lands on goes out as a burst: a
+   * throttled push could drop it, leaving receivers on a mid-fade frame until
+   * the keepalive.
    */
   const startFadeDriver = useCallback(() => {
     if (fadeTimerRef.current !== null) return // loop already running
     fadeTimerRef.current = setInterval(() => {
       const settled = currentAlpha() === fadeRef.current.to
       draw()
-      if (ndiConfigRef.current.active) pushNdiFrameRef.current?.()
-      if (settled) stopFadeDriver()
+      if (settled) {
+        stopFadeDriver()
+        pushNdiBurstRef.current?.()
+      } else {
+        pushNdiFrameThrottledRef.current?.()
+      }
     }, FADE_TICK_MS)
   }, [currentAlpha, draw, stopFadeDriver])
 
@@ -353,13 +360,31 @@ function BroadcastCanvas() {
     setTimeout(() => void pushNdiFrame(), 300)
   }, [pushNdiFrame])
 
+  /**
+   * Push at most one frame per configured NDI frame interval.
+   *
+   * Continuous content — a playing video, a fade in progress — repaints the
+   * canvas far faster than a base64 frame round-trip to the sender can
+   * absorb. Bursting on every repaint would queue work forever; pushing on
+   * none of them is what left video arriving at the 2s keepalive rate, about
+   * half a frame a second. `pushNdiFrame` still drops anything that arrives
+   * while a push is in flight, so a slow encoder throttles this further
+   * instead of backing up.
+   */
+  const pushNdiFrameThrottled = useCallback(() => {
+    if (!ndiConfigRef.current.active) return
+    const frameIntervalMs = 1000 / Math.max(1, ndiConfigRef.current.fps)
+    if (Date.now() - lastPushRef.current < frameIntervalMs) return
+    void pushNdiFrame()
+  }, [pushNdiFrame])
+
   // Image loads finish after the burst that followed their theme update, and
   // the preload callback is defined above this — go through a ref so it can
   // re-burst without a definition cycle.
   useEffect(() => {
     pushNdiBurstRef.current = pushNdiBurst
-    pushNdiFrameRef.current = () => void pushNdiFrame()
-  }, [pushNdiBurst, pushNdiFrame])
+    pushNdiFrameThrottledRef.current = pushNdiFrameThrottled
+  }, [pushNdiBurst, pushNdiFrameThrottled])
 
   useEffect(() => {
     // Set initial canvas size
@@ -409,7 +434,17 @@ function BroadcastCanvas() {
 
     // Presentation content (slides / media loops) — see presentation-output.ts.
     const presentation = new PresentationController({
-      redraw: () => draw(),
+      // Every repaint of live media offers NDI a frame; the throttle decides.
+      // Without this a playing video updated the canvas smoothly while
+      // receivers only saw whatever the 2s keepalive happened to catch. An
+      // overlay output keys out instead of painting the media, so its frame
+      // never changes between repaints — pushing it per video frame would be
+      // pure waste, and the burst on stop restores it either way.
+      redraw: () => {
+        draw()
+        const theme = latestData.current?.theme
+        if (theme && !isOverlayTheme(theme)) pushNdiFrameThrottledRef.current?.()
+      },
       ndiBurst: () => pushNdiBurstRef.current?.(),
     })
     presentationRef.current = presentation
