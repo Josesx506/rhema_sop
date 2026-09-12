@@ -172,9 +172,14 @@ function BroadcastCanvas() {
 
     // Slides and media loops cover the theme's background region, not the
     // whole frame, so a partial-width theme keeps showing what surrounds it.
-    // An overlay theme has no region of its own to give away, so it declines
-    // the content outright and stays on the verse scene — a sermon slide must
-    // not black out the camera the lower third is sitting on.
+    //
+    // An overlay theme has no opaque region to give them, so that output goes
+    // empty for as long as the media is on air: blacking out the camera the
+    // lower third sits on would be wrong, but so is holding the last verse or
+    // chorus over a video the service has already moved on to — song lyrics
+    // suppress the idle fade, so they would sit there indefinitely. The fade
+    // state is left untouched, so whatever was on screen resumes when the
+    // media stops.
     const presentation = presentationRef.current
     if (presentation?.active) {
       if (!isOverlayTheme(theme)) {
@@ -184,9 +189,13 @@ function BroadcastCanvas() {
           canvas.height,
           backgroundRegion(ctx, theme)
         )
-        return
+      } else if (fadeTarget !== "transparent") {
+        // An overlay's "nothing on screen" is transparent whatever the idle
+        // target says — that setting picks where a fade lands, not what an
+        // empty layer looks like.
+        ctx.clearRect(0, 0, canvas.width, canvas.height)
       }
-      // Overlay theme: fall through and keep drawing the verse scene.
+      return
     }
 
     const alpha = currentAlpha()

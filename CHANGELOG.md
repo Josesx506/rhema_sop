@@ -40,10 +40,13 @@ Fork releases of Rhema (rhema_sop). Dates are release dates.
   render opacity), so a blanked or idle overlay leaves the video clean.
 - **Slides and videos no longer black out an overlay feed.** Presentation
   content used to fill the entire frame on every output. It is now confined
-  to the theme's background region, and a theme with a transparent
-  background (Lower Thirds, any NDI overlay) declines it outright and keeps
-  showing scripture or lyrics — a sermon slide on the projector no longer
-  covers the camera the lower third is keyed over.
+  to the theme's background region, so a sermon slide on the projector no
+  longer covers the camera an NDI lower third is keyed over. A theme with a
+  transparent background has no opaque region to host it, so that output
+  keys out entirely for as long as the media is on air rather than holding
+  the last verse or chorus over a video the service has moved on from — song
+  lyrics suppress the idle fade, so those would otherwise have sat there for
+  the whole video. Whatever was on screen returns when the media stops.
 - **Importing a catalog no longer duplicates songs.** Every import path
   re-issues fresh song ids, so re-importing the same file, or the same
   ProPresenter bundle twice, piled up copies. Imports are now matched
