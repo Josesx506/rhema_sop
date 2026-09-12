@@ -6,6 +6,7 @@ import { expandSong } from "@/lib/songs/block-expansion"
 import { blockToRenderData } from "@/lib/songs/song-to-render-data"
 import { SAMPLE_SONG } from "@/lib/songs/sample-song"
 import { resolveSetlist, type SetlistExport } from "@/lib/songs/setlist-file"
+import { dedupeIncomingSongs } from "@/lib/songs/song-dedupe"
 import { useBroadcastStore } from "@/stores/broadcast-store"
 
 interface FlatBlockRef {
@@ -31,9 +32,11 @@ interface SongState {
   addSong: (input: Omit<Song, "id" | "createdAt" | "updatedAt">) => Song
   updateSong: (id: string, patch: Partial<Omit<Song, "id">>) => void
   deleteSong: (id: string) => void
-  /** Bulk-merge already-fully-formed songs (e.g. from a catalog JSON import) —
-   * appends, never overwrites an existing song. */
-  importSongs: (songs: Song[]) => void
+  /** Bulk-merge already-fully-formed songs (e.g. from a catalog JSON import).
+   * Appends, never overwrites; songs already in the catalog (by title +
+   * artist, see songIdentityKey) and repeats within the batch are dropped.
+   * Returns a summary for the operator toast. */
+  importSongs: (songs: Song[]) => { added: number; duplicates: number }
   setSearchQuery: (query: string) => void
 
   // Setlist
@@ -112,7 +115,15 @@ export const useSongStore = create<SongState>((set, get) => ({
       songs: s.songs.map((song) => (song.id === id ? { ...song, ...patch, id, updatedAt: Date.now() } : song)),
     })),
   deleteSong: (id) => set((s) => ({ songs: s.songs.filter((song) => song.id !== id) })),
-  importSongs: (songs) => set((s) => ({ songs: [...s.songs, ...songs] })),
+  importSongs: (songs) => {
+    let summary = { added: 0, duplicates: 0 }
+    set((s) => {
+      const { added, duplicates } = dedupeIncomingSongs(songs, s.songs)
+      summary = { added: added.length, duplicates: duplicates.length }
+      return added.length > 0 ? { songs: [...s.songs, ...added] } : {}
+    })
+    return summary
+  },
   setSearchQuery: (searchQuery) => set({ searchQuery }),
 
   allowSetlistDuplicates: false,

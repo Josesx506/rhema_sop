@@ -512,6 +512,8 @@ function DisplayModeSection() {
         <p className="text-[0.625rem] text-muted-foreground">
           What the display fades to when idle or blanked: full black, or the
           active theme&apos;s background and logo with only the text removed.
+          NDI outputs ignore this and always fade to fully transparent, so
+          the video they are keyed over stays unobstructed.
         </p>
       </div>
     </div>

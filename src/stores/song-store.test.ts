@@ -96,12 +96,55 @@ describe("song store catalog CRUD", () => {
     const existing = useSongStore.getState().addSong({ title: "Existing", artist: "", sections: [], arrangement: [] })
     const incoming = makeSong({ title: "Imported" })
 
-    useSongStore.getState().importSongs([incoming])
+    const summary = useSongStore.getState().importSongs([incoming])
 
     const songs = useSongStore.getState().songs
     expect(songs).toHaveLength(2)
     expect(songs[0]).toEqual(existing)
     expect(songs[1]).toEqual(incoming)
+    expect(summary).toEqual({ added: 1, duplicates: 0 })
+  })
+
+  it("importSongs skips songs already in the catalog even with fresh ids", async () => {
+    const { useSongStore } = await import("./song-store")
+    useSongStore.getState().addSong({
+      title: "Amazing Grace",
+      artist: "John Newton",
+      sections: [],
+      arrangement: [],
+    })
+    // What a re-import looks like: same song, brand-new id and casing noise.
+    const reimported = makeSong({ title: "  amazing   grace ", artist: "JOHN Newton" })
+    const fresh = makeSong({ title: "Come Thou Fount", artist: "" })
+
+    const summary = useSongStore.getState().importSongs([reimported, fresh])
+
+    expect(summary).toEqual({ added: 1, duplicates: 1 })
+    expect(useSongStore.getState().songs.map((s) => s.title)).toEqual([
+      "Amazing Grace",
+      "Come Thou Fount",
+    ])
+  })
+
+  it("importSongs collapses repeats inside one batch", async () => {
+    const { useSongStore } = await import("./song-store")
+    const summary = useSongStore
+      .getState()
+      .importSongs([makeSong({ title: "Grace" }), makeSong({ title: "grace" }), makeSong({ title: "Peace" })])
+
+    expect(summary).toEqual({ added: 2, duplicates: 1 })
+    expect(useSongStore.getState().songs).toHaveLength(2)
+  })
+
+  it("importSongs leaves the catalog reference untouched when everything is a duplicate", async () => {
+    const { useSongStore } = await import("./song-store")
+    useSongStore.getState().addSong({ title: "Grace", artist: "", sections: [], arrangement: [] })
+    const before = useSongStore.getState().songs
+
+    const summary = useSongStore.getState().importSongs([makeSong({ title: "Grace", artist: "" })])
+
+    expect(summary).toEqual({ added: 0, duplicates: 1 })
+    expect(useSongStore.getState().songs).toBe(before)
   })
 
   it("deleteSong removes the song from the catalog", async () => {

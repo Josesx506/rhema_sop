@@ -96,6 +96,85 @@ describe("broadcast store sync", () => {
     )
   })
 
+  it("always fades an NDI output to transparent, live or not", async () => {
+    const { useBroadcastStore } = await import("./broadcast-store")
+    const { useSettingsStore } = await import("./settings-store")
+    useSettingsStore.setState({ idleFadeTarget: "theme" })
+    const theme = useBroadcastStore.getState().themes[0]
+    useBroadcastStore.setState({
+      isLive: true,
+      liveVerse: sampleLiveVerse,
+      outputs: [
+        {
+          id: "stream",
+          name: "Stream",
+          type: "ndi",
+          themeId: theme.id,
+          monitorIndex: 0,
+          ndi: { ...ndiDefaults, sourceName: "Rhema Stream" },
+        },
+      ],
+    })
+
+    emitToMock.mockClear()
+    useBroadcastStore.getState().syncBroadcastOutput()
+    // An NDI feed is a layer over someone else's video: neither the theme
+    // background nor black may be painted over it when the text goes.
+    expect(emitToMock).toHaveBeenCalledWith(
+      "broadcast-stream",
+      "broadcast:verse-update",
+      expect.objectContaining({ idleFadeTarget: "transparent" }),
+    )
+
+    emitToMock.mockClear()
+    useBroadcastStore.getState().setLive(false)
+    expect(emitToMock).toHaveBeenCalledWith(
+      "broadcast-stream",
+      "broadcast:verse-update",
+      expect.objectContaining({ idleFadeTarget: "transparent", verse: null }),
+    )
+  })
+
+  it("picks the fade target per output, so a display and an NDI feed differ", async () => {
+    const { useBroadcastStore } = await import("./broadcast-store")
+    const { useSettingsStore } = await import("./settings-store")
+    useSettingsStore.setState({ idleFadeTarget: "theme" })
+    const theme = useBroadcastStore.getState().themes[0]
+    useBroadcastStore.setState({
+      isLive: true,
+      liveVerse: sampleLiveVerse,
+      outputs: [
+        {
+          id: "main",
+          name: "Main Display",
+          type: "display",
+          themeId: theme.id,
+          monitorIndex: 0,
+          ndi: { ...ndiDefaults },
+        },
+        {
+          id: "stream",
+          name: "Stream",
+          type: "ndi",
+          themeId: theme.id,
+          monitorIndex: 0,
+          ndi: { ...ndiDefaults, sourceName: "Rhema Stream" },
+        },
+      ],
+    })
+
+    emitToMock.mockClear()
+    useBroadcastStore.getState().syncBroadcastOutput()
+
+    const targets = Object.fromEntries(
+      emitToMock.mock.calls.map(([label, , payload]) => [label, payload.idleFadeTarget]),
+    )
+    expect(targets).toEqual({
+      "broadcast-main": "theme",
+      "broadcast-stream": "transparent",
+    })
+  })
+
   it("syncBroadcastOutput fans out to every output with its own theme", async () => {
     const { useBroadcastStore } = await import("./broadcast-store")
     const state = useBroadcastStore.getState()

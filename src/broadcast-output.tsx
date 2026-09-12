@@ -2,7 +2,12 @@ import { createRoot } from "react-dom/client"
 import { useRef, useEffect, useCallback } from "react"
 import { invoke } from "@tauri-apps/api/core"
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow"
-import { onThemeFontsLoaded, renderVerse } from "@/lib/verse-renderer"
+import {
+  computeVerseLayoutMetrics,
+  onThemeFontsLoaded,
+  renderVerse,
+  type VerseLayoutRect,
+} from "@/lib/verse-renderer"
 import { preloadThemeImages, themeImageCache } from "@/lib/theme-image-cache"
 import { normalizeTheme } from "@/lib/theme-migrations"
 import { PresentationController } from "@/lib/presentation-output"
@@ -12,7 +17,11 @@ import {
 } from "@/types/presentation"
 import "./broadcast-fonts.css"
 import type { BroadcastTheme, VerseRenderData } from "@/types/broadcast"
-import type { NdiConfigEventPayload, NdiFrameRequest } from "@/types"
+import type {
+  NdiConfigEventPayload,
+  NdiFrameRequest,
+  OutputFadeTarget,
+} from "@/types"
 
 /** Convert Uint8Array/Uint8ClampedArray to base64 using Function.apply (avoids spread stack overflow) */
 function uint8ToBase64(bytes: Uint8Array | Uint8ClampedArray): string {
@@ -36,15 +45,34 @@ interface BroadcastPayload {
   theme: BroadcastTheme
   verse: VerseRenderData | null
   idleFadeMs?: number
-  /** Fork: what a faded-out output shows — full black (default) or the
-   * theme background + logo with just the text faded away. */
-  idleFadeTarget?: "black" | "theme"
+  /** Fork: what a faded-out output shows — black (default), the theme
+   * background + logo with just the text gone, or nothing at all. See
+   * OutputFadeTarget; the store picks "transparent" for every NDI output. */
+  idleFadeTarget?: OutputFadeTarget
 }
 
 /** Fallback if a payload arrives without idleFadeMs (older event shape). Kept
  * in sync with the Idle Fade Timeout default in settings-store.ts. */
-const DEFAULT_IDLE_FADE_MS = 30_000
+const DEFAULT_IDLE_FADE_MS = 60_000
 const FADE_DURATION_MS = 800
+/**
+ * The fade is stepped by a timer rather than requestAnimationFrame: an NDI
+ * output's window is hidden, and a hidden webview never gets rAF callbacks —
+ * which is why the idle fade and Blank appeared to do nothing on NDI feeds
+ * while working on the visible projector window. 30 Hz is plenty for an
+ * opacity ramp, and every tick also pushes a frame so receivers see the fade
+ * instead of jumping at the next 2s keepalive.
+ */
+const FADE_TICK_MS = 1000 / 30
+
+/**
+ * A theme with a transparent background is a layer over someone else's
+ * picture (Lower Thirds, any NDI overlay). It has no frame of its own to give
+ * away, so slides and media loops never take it over.
+ */
+function isOverlayTheme(theme: BroadcastTheme): boolean {
+  return theme.background.type === "transparent"
+}
 
 function BroadcastCanvas() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -58,10 +86,14 @@ function BroadcastCanvas() {
   const ndiCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const lastPushRef = useRef(0)
   const pushingRef = useRef(false)
-  const alphaRef = useRef(1)
-  const targetAlphaRef = useRef(1)
-  const rafRef = useRef<number | null>(null)
-  const lastFrameTimeRef = useRef<number | null>(null)
+  // Fade is described by where it started, where it is heading and when it
+  // began, so any redraw — timer tick, keepalive, incidental re-emit — can
+  // compute the correct alpha from the clock instead of relying on a frame
+  // loop that a hidden window never runs.
+  const fadeRef = useRef({ from: 1, to: 1, start: 0, duration: 0 })
+  const fadeTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const pushNdiFrameRef = useRef<(() => void) | null>(null)
+  const regionCacheRef = useRef<{ theme: BroadcastTheme; rect: VerseLayoutRect } | null>(null)
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // presentedAt of the verse the fade timer was last armed for; undefined =
   // nothing shown. Only a CHANGED stamp re-arms the timer, so incidental
@@ -79,18 +111,37 @@ function BroadcastCanvas() {
     console.debug(`[broadcast-output] ${message}`, meta)
   }, [])
 
+  /**
+   * The theme's background region in canvas pixels — what a slide or media
+   * loop is allowed to cover. Cached on theme identity because a playing
+   * video redraws every frame.
+   */
+  const backgroundRegion = useCallback(
+    (ctx: CanvasRenderingContext2D, theme: BroadcastTheme): VerseLayoutRect => {
+      const cached = regionCacheRef.current
+      if (cached?.theme === theme) return cached.rect
+      const rect = computeVerseLayoutMetrics(ctx, theme, null).backgroundRect
+      regionCacheRef.current = { theme, rect }
+      return rect
+    },
+    []
+  )
+
+  /** Fade alpha for right now, derived from the clock. */
+  const currentAlpha = useCallback((now = performance.now()) => {
+    const fade = fadeRef.current
+    if (fade.duration <= 0) return fade.to
+    const progress = (now - fade.start) / fade.duration
+    if (progress >= 1) return fade.to
+    if (progress <= 0) return fade.from
+    return fade.from + (fade.to - fade.from) * progress
+  }, [])
+
   const draw = useCallback(() => {
     const canvas = canvasRef.current
     if (!canvas) return
     const ctx = canvas.getContext("2d")
     if (!ctx) return
-
-    // Presentation content (slides / media loops) owns the whole frame and
-    // ignores the verse scene and idle fade while active.
-    if (presentationRef.current?.active) {
-      presentationRef.current.drawFrame(ctx, canvas.width, canvas.height)
-      return
-    }
 
     const data = latestData.current
     if (!data) {
@@ -102,26 +153,54 @@ function BroadcastCanvas() {
     }
 
     const { theme, verse } = data
-    canvas.width = theme.resolution.width
-    canvas.height = theme.resolution.height
+    // Assigning width/height resets the canvas, so only do it on a real
+    // change — a playing video redraws every frame through here.
+    if (canvas.width !== theme.resolution.width) canvas.width = theme.resolution.width
+    if (canvas.height !== theme.resolution.height) canvas.height = theme.resolution.height
+    const fadeTarget = data.idleFadeTarget ?? "black"
 
-    // Clear to black at full opacity first, then draw the scene at the
-    // current fade alpha, so fading blends toward black rather than
-    // ghosting over whatever the canvas previously held.
+    // Base frame. A transparent output starts from zero alpha rather than
+    // black: the whole point of an NDI overlay is that the receiver's video
+    // shows through everything this frame does not paint.
     ctx.globalAlpha = 1
-    ctx.fillStyle = "#000"
-    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    if (fadeTarget === "transparent") {
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+    } else {
+      ctx.fillStyle = "#000"
+      ctx.fillRect(0, 0, canvas.width, canvas.height)
+    }
+
+    // Slides and media loops cover the theme's background region, not the
+    // whole frame, so a partial-width theme keeps showing what surrounds it.
+    // An overlay theme has no region of its own to give away, so it declines
+    // the content outright and stays on the verse scene — a sermon slide must
+    // not black out the camera the lower third is sitting on.
+    const presentation = presentationRef.current
+    if (presentation?.active) {
+      if (!isOverlayTheme(theme)) {
+        presentation.drawFrame(
+          ctx,
+          canvas.width,
+          canvas.height,
+          backgroundRegion(ctx, theme)
+        )
+        return
+      }
+      // Overlay theme: fall through and keep drawing the verse scene.
+    }
+
+    const alpha = currentAlpha()
     // Fork fade-to-theme: keep the background + logo solid underneath so
     // the fade only takes the text away. The verse pass then repaints the
     // identical background over itself, leaving just the text at fade
     // alpha. Skipped at alpha 1 — the verse pass alone is the same frame.
-    if (data.idleFadeTarget === "theme" && alphaRef.current < 1) {
+    if (fadeTarget === "theme" && alpha < 1) {
       renderVerse(ctx, theme, null, {
         scale: 1,
         imageCache: themeImageCache(),
       })
     }
-    ctx.globalAlpha = alphaRef.current
+    ctx.globalAlpha = alpha
 
     const result = renderVerse(ctx, theme, verse, {
       scale: 1,
@@ -129,48 +208,46 @@ function BroadcastCanvas() {
     })
     ctx.globalAlpha = 1
     if (!result) {
-      ctx.fillStyle = "#000"
-      ctx.fillRect(0, 0, canvas.width, canvas.height)
+      if (fadeTarget !== "transparent") {
+        ctx.fillStyle = "#000"
+        ctx.fillRect(0, 0, canvas.width, canvas.height)
+      }
       logDebug("renderVerse returned null; drew fallback frame")
     }
-  }, [logDebug])
+  }, [backgroundRegion, currentAlpha, logDebug])
 
-  // Animate alphaRef toward targetAlphaRef, redrawing each frame. Reads
-  // targetAlphaRef live on every tick, so retargeting mid-fade (e.g. a new
-  // verse arrives while fading out) smoothly reverses direction instead of
-  // finishing the stale animation first.
-  const animateFade = useCallback(() => {
-    if (rafRef.current !== null) return // loop already running
-    lastFrameTimeRef.current = null
-
-    const step = (now: number) => {
-      const last = lastFrameTimeRef.current ?? now
-      const dt = now - last
-      lastFrameTimeRef.current = now
-
-      const target = targetAlphaRef.current
-      const diff = target - alphaRef.current
-      if (Math.abs(diff) < 0.01) {
-        alphaRef.current = target
-        draw()
-        rafRef.current = null
-        lastFrameTimeRef.current = null
-        return
-      }
-
-      alphaRef.current += (dt / FADE_DURATION_MS) * diff
-      draw()
-      rafRef.current = requestAnimationFrame(step)
+  const stopFadeDriver = useCallback(() => {
+    if (fadeTimerRef.current !== null) {
+      clearInterval(fadeTimerRef.current)
+      fadeTimerRef.current = null
     }
-    rafRef.current = requestAnimationFrame(step)
-  }, [draw])
+  }, [])
+
+  /**
+   * Step the fade until it lands, redrawing and — while NDI is running —
+   * pushing each intermediate frame. Reads the target off the ref every tick,
+   * so retargeting mid-fade (a new verse arriving while fading out) reverses
+   * smoothly instead of finishing the stale animation first.
+   */
+  const startFadeDriver = useCallback(() => {
+    if (fadeTimerRef.current !== null) return // loop already running
+    fadeTimerRef.current = setInterval(() => {
+      const settled = currentAlpha() === fadeRef.current.to
+      draw()
+      if (ndiConfigRef.current.active) pushNdiFrameRef.current?.()
+      if (settled) stopFadeDriver()
+    }, FADE_TICK_MS)
+  }, [currentAlpha, draw, stopFadeDriver])
 
   const setFadeTarget = useCallback(
     (target: number) => {
-      targetAlphaRef.current = target
-      animateFade()
+      const now = performance.now()
+      const from = currentAlpha(now)
+      if (from === target && fadeRef.current.to === target) return
+      fadeRef.current = { from, to: target, start: now, duration: FADE_DURATION_MS }
+      startFadeDriver()
     },
-    [animateFade]
+    [currentAlpha, startFadeDriver]
   )
 
   const clearIdleTimer = useCallback(() => {
@@ -188,7 +265,7 @@ function BroadcastCanvas() {
       if (idleFadeMs <= 0) return
       idleTimerRef.current = setTimeout(() => {
         idleTimerRef.current = null
-        logDebug("Idle timeout reached; fading display to black")
+        logDebug("Idle timeout reached; fading display out")
         setFadeTarget(0)
       }, idleFadeMs)
     },
@@ -267,7 +344,8 @@ function BroadcastCanvas() {
   // re-burst without a definition cycle.
   useEffect(() => {
     pushNdiBurstRef.current = pushNdiBurst
-  }, [pushNdiBurst])
+    pushNdiFrameRef.current = () => void pushNdiFrame()
+  }, [pushNdiBurst, pushNdiFrame])
 
   useEffect(() => {
     // Set initial canvas size
@@ -372,7 +450,7 @@ function BroadcastCanvas() {
       presentation.dispose()
       presentationRef.current = null
       clearIdleTimer()
-      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current)
+      stopFadeDriver()
     }
   }, [
     draw,
@@ -383,6 +461,7 @@ function BroadcastCanvas() {
     setFadeTarget,
     armIdleTimer,
     clearIdleTimer,
+    stopFadeDriver,
   ])
 
   // Slow keepalive: push one frame every 2s if idle (prevents NDI receivers from dropping the source)

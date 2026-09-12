@@ -5,6 +5,7 @@ import type {
   BroadcastOutput,
   BroadcastOutputStatus,
   BroadcastTheme,
+  OutputFadeTarget,
   Verse,
   VerseRenderData,
 } from "@/types"
@@ -113,6 +114,18 @@ function setNestedValue(obj: Record<string, unknown>, path: string, value: unkno
   return result
 }
 
+/**
+ * What this output shows once it has faded out. An NDI feed is a layer over
+ * someone else's video, so it always fades to fully transparent — black or a
+ * theme background would sit on the camera as an opaque (or, with a lower
+ * third's plate, grey) sheet. Display outputs follow the operator's Idle
+ * Display setting while live and go black off-air.
+ */
+function idleFadeTargetFor(output: BroadcastOutput, isLive: boolean): OutputFadeTarget {
+  if (output.type === "ndi") return "transparent"
+  return isLive ? useSettingsStore.getState().idleFadeTarget : "black"
+}
+
 function emitDraftToBroadcast(state: BroadcastState): void {
   if (!state.draftTheme) return
   const verse = state.isLive && !state.outputBlanked ? state.liveVerse : null
@@ -123,9 +136,7 @@ function emitDraftToBroadcast(state: BroadcastState): void {
       theme: state.draftTheme,
       verse,
       idleFadeMs,
-      idleFadeTarget: state.isLive
-        ? useSettingsStore.getState().idleFadeTarget
-        : "black",
+      idleFadeTarget: idleFadeTargetFor(output, state.isLive),
     }).catch(() => {})
   }
 }
@@ -264,11 +275,7 @@ export const useBroadcastStore = create<BroadcastState>((set, get) => ({
           ? 0
           : useSettingsStore.getState().idleFadeMs,
       // Fork: what a faded-out output shows (idle fade / operator blank).
-      // Off-air always fades to black — the theme background only holds
-      // while the output is live.
-      idleFadeTarget: s.isLive
-        ? useSettingsStore.getState().idleFadeTarget
-        : "black",
+      idleFadeTarget: idleFadeTargetFor(output, s.isLive),
     }).catch(() => {})
   },
   syncBroadcastOutput: () => {

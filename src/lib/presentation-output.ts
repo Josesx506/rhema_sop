@@ -118,14 +118,27 @@ export class PresentationController {
   /**
    * Draw the current presentation frame. Returns false when nothing is
    * active (host then draws the normal verse scene).
+   *
+   * `region` bounds the content to the theme's background area rather than
+   * the whole canvas, so a theme that only owns part of the frame — a lower
+   * third, a side panel — does not black out what it is overlaid on. Omit it
+   * for the full frame.
    */
-  drawFrame(ctx: CanvasRenderingContext2D, width: number, height: number): boolean {
+  drawFrame(
+    ctx: CanvasRenderingContext2D,
+    width: number,
+    height: number,
+    region?: { x: number; y: number; width: number; height: number }
+  ): boolean {
     const content = this.content
     if (!content) return false
 
+    const box = region ?? { x: 0, y: 0, width, height }
+    if (box.width <= 0 || box.height <= 0) return true
+
     ctx.globalAlpha = 1
     ctx.fillStyle = "#000"
-    ctx.fillRect(0, 0, width, height)
+    ctx.fillRect(box.x, box.y, box.width, box.height)
 
     const source =
       content.kind === "slide"
@@ -143,15 +156,21 @@ export class PresentationController {
 
     const fit = content.kind === "slide" ? (content.fit ?? "contain") : "contain"
     const srcRatio = srcW / srcH
-    const dstRatio = width / height
-    let drawW = width
-    let drawH = height
+    const dstRatio = box.width / box.height
+    let drawW = box.width
+    let drawH = box.height
     if (fit === "contain" ? srcRatio > dstRatio : srcRatio < dstRatio) {
-      drawH = width / srcRatio
+      drawH = box.width / srcRatio
     } else {
-      drawW = height * srcRatio
+      drawW = box.height * srcRatio
     }
-    ctx.drawImage(source, (width - drawW) / 2, (height - drawH) / 2, drawW, drawH)
+    ctx.drawImage(
+      source,
+      box.x + (box.width - drawW) / 2,
+      box.y + (box.height - drawH) / 2,
+      drawW,
+      drawH
+    )
     return true
   }
 

@@ -13,6 +13,7 @@ export type {
   BroadcastOutputNdiSettings,
   BroadcastOutputStatus,
   BroadcastOutputType,
+  OutputFadeTarget,
 } from "./broadcast-output"
 export { MAIN_OUTPUT_ID, defaultNdiSettings, outputWindowLabel } from "./broadcast-output"
 export type {

@@ -50,6 +50,20 @@ async function readXmlFile(extensionLabel: string): Promise<string | null> {
   return new TextDecoder().decode(bytes)
 }
 
+/**
+ * Bulk imports all report the same way: how many songs actually landed, and
+ * what was skipped. Nothing new is information, not success — a success
+ * toast reading "Imported 0 songs" is what made repeat imports look fine.
+ */
+function reportImport(added: number, skipped: string[]): void {
+  const description = skipped.length > 0 ? `Skipped ${skipped.join(", ")}` : undefined
+  if (added === 0) {
+    toast.info(skipped.length > 0 ? "Nothing new to import" : "No songs to import", { description })
+    return
+  }
+  toast.success(`Imported ${added} song${added === 1 ? "" : "s"}`, { description })
+}
+
 function SongRow({
   song,
   confirmingDelete,
@@ -165,8 +179,8 @@ export function SongCatalogPanel() {
       try {
         const imported = await importCatalogFile()
         if (!imported) return
-        useSongStore.getState().importSongs(imported)
-        toast.success(`Imported ${imported.length} song${imported.length === 1 ? "" : "s"}`)
+        const { added, duplicates } = useSongStore.getState().importSongs(imported)
+        reportImport(added, duplicates > 0 ? [`${duplicates} already in the catalog`] : [])
       } catch (err) {
         toast.error("Catalog import failed", { description: String(err instanceof Error ? err.message : err) })
       }
@@ -178,13 +192,15 @@ export function SongCatalogPanel() {
       try {
         const result = await importProBundleFile()
         if (!result) return
-        useSongStore.getState().importSongs(result.songs)
+        const { added, duplicates } = useSongStore.getState().importSongs(result.songs)
+        // The bundle's own repeats and the ones already in the catalog are
+        // disjoint sets (result.songs is what the bundle deduped down to),
+        // so they add up rather than overlap.
+        const repeats = result.duplicates.length + duplicates
         const extras: string[] = []
+        if (repeats) extras.push(`${repeats} duplicate${repeats === 1 ? "" : "s"}`)
         if (result.skipped.length) extras.push(`${result.skipped.length} non-song decks`)
-        if (result.duplicates.length) extras.push(`${result.duplicates.length} duplicates`)
-        toast.success(`Imported ${result.songs.length} song${result.songs.length === 1 ? "" : "s"}`, {
-          description: extras.length ? `Skipped ${extras.join(", ")}` : undefined,
-        })
+        reportImport(added, extras)
       } catch (err) {
         toast.error("Import failed", { description: String(err instanceof Error ? err.message : err) })
       }

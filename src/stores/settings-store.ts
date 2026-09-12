@@ -47,7 +47,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   autoMode: false,
   confidenceThreshold: 0.8,
   cooldownMs: 2500,
-  idleFadeMs: 30_000,
+  idleFadeMs: 60_000,
   idleFadeTarget: "theme",
   onboardingComplete: false,
   sttProvider: "deepgram",
