@@ -115,27 +115,42 @@ function setNestedValue(obj: Record<string, unknown>, path: string, value: unkno
 }
 
 /**
- * What this output shows once it has faded out. An NDI feed is a layer over
- * someone else's video, so it always fades to fully transparent — black or a
- * theme background would sit on the camera as an opaque (or, with a lower
- * third's plate, grey) sheet. Display outputs follow the operator's Idle
- * Display setting while live and go black off-air.
+ * What this output shows once it has faded out. The two output kinds are
+ * configured separately: an NDI feed is a layer over someone else's video, so
+ * it defaults to keying out entirely, while a monitor or projector defaults to
+ * the theme background. A display always goes black off-air — the theme
+ * background only holds while it is live — whereas an NDI feed keeps its
+ * configured look, since covering the camera when nothing is on air is never
+ * what the operator meant.
  */
 function idleFadeTargetFor(output: BroadcastOutput, isLive: boolean): OutputFadeTarget {
-  if (output.type === "ndi") return "transparent"
-  return isLive ? useSettingsStore.getState().idleFadeTarget : "black"
+  const settings = useSettingsStore.getState()
+  if (output.type === "ndi") return settings.ndiIdleFadeTarget
+  return isLive ? settings.idleFadeTarget : "black"
+}
+
+/**
+ * How long this output waits before fading, or 0 for "never". Song blocks
+ * pin themselves up regardless (noAutoFade), and each output kind can have
+ * the idle fade switched off on its own.
+ */
+function idleFadeMsFor(output: BroadcastOutput, state: BroadcastState): number {
+  if (state.isLive && state.liveVerse?.noAutoFade) return 0
+  const settings = useSettingsStore.getState()
+  const enabled =
+    output.type === "ndi" ? settings.ndiIdleFadeEnabled : settings.idleFadeEnabled
+  return enabled ? settings.idleFadeMs : 0
 }
 
 function emitDraftToBroadcast(state: BroadcastState): void {
   if (!state.draftTheme) return
   const verse = state.isLive && !state.outputBlanked ? state.liveVerse : null
-  const idleFadeMs = verse?.noAutoFade ? 0 : useSettingsStore.getState().idleFadeMs
   for (const output of state.outputs) {
     if (output.themeId !== state.editingThemeId) continue
     void emitTo(outputWindowLabel(output.id), "broadcast:verse-update", {
       theme: state.draftTheme,
       verse,
-      idleFadeMs,
+      idleFadeMs: idleFadeMsFor(output, state),
       idleFadeTarget: idleFadeTargetFor(output, state.isLive),
     }).catch(() => {})
   }
@@ -270,10 +285,7 @@ export const useBroadcastStore = create<BroadcastState>((set, get) => ({
     void emitTo(outputWindowLabel(outputId), "broadcast:verse-update", {
       theme,
       verse: s.isLive && !s.outputBlanked ? s.liveVerse : null,
-      idleFadeMs:
-        s.isLive && s.liveVerse?.noAutoFade
-          ? 0
-          : useSettingsStore.getState().idleFadeMs,
+      idleFadeMs: idleFadeMsFor(output, s),
       // Fork: what a faded-out output shows (idle fade / operator blank).
       idleFadeTarget: idleFadeTargetFor(output, s.isLive),
     }).catch(() => {})

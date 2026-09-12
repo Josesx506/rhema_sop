@@ -4,6 +4,16 @@ Fork releases of Rhema (rhema_sop). Dates are release dates.
 
 ## Unreleased
 
+### Added
+
+- **The idle fade is now a switch, set separately for the projector and for
+  NDI** (Settings → Display Mode). Each output kind has its own "Fade when
+  idle" toggle — both on by default — and its own choice of what a faded or
+  blanked output shows: Theme background / Black for a monitor or projector,
+  and Transparent (default) / Theme background / Black for an NDI feed. So an
+  overlay can stay up until the operator blanks it while the projector still
+  times out. The timeout slider is shared; song lyrics still never time out.
+
 ### Fixed
 
 - **NDI outputs fade and blank to transparent.** The idle fade and the Blank
@@ -15,6 +25,13 @@ Fork releases of Rhema (rhema_sop). Dates are release dates.
   every NDI output fades to fully transparent rather than to black or the
   theme background — whatever the Idle Display setting says, which now only
   governs display outputs.
+- **Fade-to-theme keeps the scenery on an overlay theme.** The fade drew the
+  scene twice — once solid, once at the fade alpha — which a transparent
+  background undid, because the renderer starts that case with a `clearRect`
+  that erased the solid pass. `renderVerse` now takes a `layer` option and the
+  fade paints scenery (background, logo, plates) once at full opacity and text
+  once at the fade alpha. That also stops semi-transparent plates being
+  painted twice and darkening mid-fade on any theme.
 - **A theme's plate now fades with everything else.** `drawSurface` set the
   canvas alpha to the surface's own opacity instead of scaling the alpha
   already in force, so the Lower Thirds band ignored the fade completely —

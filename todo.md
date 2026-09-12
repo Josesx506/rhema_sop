@@ -66,10 +66,6 @@ lines with under 60 touched upstream lines.
   an NDI feed arrives as a near-slideshow. Needs an fps-throttled push in the
   presentation redraw callback (`broadcast-output.tsx`). The idle fade got its
   own per-tick push in the same subsystem; reuse that shape.
-- Fading a transparent-background theme with Idle Display = "theme" loses the
-  plate as well as the text: `renderVerse`'s `clearRect` for a transparent
-  background wipes the solid background pass drawn under it. Only affects
-  display outputs on an overlay theme (NDI now fades to transparent).
 
 ## Deployment state (church Windows PC)
 

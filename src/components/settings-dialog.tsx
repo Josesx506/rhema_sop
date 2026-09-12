@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/select"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Slider } from "@/components/ui/slider"
+import { Switch } from "@/components/ui/switch"
 import {
   Dialog,
   DialogContent,
@@ -48,6 +49,7 @@ import {
 import { LevelMeter } from "@/components/ui/level-meter"
 import { useAudioTest } from "@/hooks/use-audio-test"
 import { useSettingsStore, useBroadcastStore } from "@/stores"
+import type { IdleFadeTarget, NdiIdleFadeTarget } from "@/stores/settings-store"
 import { useTranscriptStore } from "@/stores/transcript-store"
 import { useTutorialStore } from "@/stores/tutorial-store"
 import { useSettingsDialogStore } from "@/lib/settings-dialog"
@@ -365,6 +367,72 @@ function SpeechSection() {
 /*  Section: Display Mode                                                     */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * Fork: one output kind's idle-fade settings. The "fades to" choice governs
+ * the operator Blank as well as the timed fade, so it stays live even when
+ * the fade itself is switched off.
+ */
+function IdleDisplaySection({
+  title,
+  enabled,
+  onEnabledChange,
+  target,
+  onTargetChange,
+  options,
+  help,
+}: {
+  title: string
+  enabled: boolean
+  onEnabledChange: (enabled: boolean) => void
+  target: string
+  onTargetChange: (target: string) => void
+  options: { value: string; label: string }[]
+  help: string
+}) {
+  // Re-emit so an already-faded or blanked output picks the change up
+  // immediately instead of waiting for the next present.
+  const resync = () => useBroadcastStore.getState().syncBroadcastOutput()
+
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border border-border p-3">
+      <div className="flex items-center justify-between">
+        <label className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+          {title}
+        </label>
+        <label className="flex items-center gap-2 text-[0.625rem] text-muted-foreground">
+          Fade when idle
+          <Switch
+            checked={enabled}
+            onCheckedChange={(checked) => {
+              onEnabledChange(checked)
+              resync()
+            }}
+          />
+        </label>
+      </div>
+      <Select
+        value={target}
+        onValueChange={(v) => {
+          onTargetChange(v)
+          resync()
+        }}
+      >
+        <SelectTrigger className="h-8 text-xs">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map((option) => (
+            <SelectItem key={option.value} value={option.value}>
+              {option.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <p className="text-[0.625rem] text-muted-foreground">{help}</p>
+    </div>
+  )
+}
+
 function DisplayModeSection() {
   // Fork: the radio reflects broadcast-store.autoLive — the flag the
   // transcript panel's Auto switch and the auto-present flow actually use —
@@ -377,8 +445,14 @@ function DisplayModeSection() {
     setConfidenceThreshold,
     idleFadeMs,
     setIdleFadeMs,
+    idleFadeEnabled,
+    setIdleFadeEnabled,
     idleFadeTarget,
     setIdleFadeTarget,
+    ndiIdleFadeEnabled,
+    setNdiIdleFadeEnabled,
+    ndiIdleFadeTarget,
+    setNdiIdleFadeTarget,
   } = useSettingsStore()
 
   const thresholdPercent = Math.round(confidenceThreshold * 100)
@@ -462,7 +536,9 @@ function DisplayModeSection() {
         </div>
       )}
 
-      {/* Idle fade timeout */}
+      {/* Fork: idle fade, configured separately per output kind. A
+          projector and an NDI overlay want different behaviour often enough
+          that one shared switch was the wrong shape. */}
       <div className="flex flex-col gap-2">
         <div className="flex items-center justify-between">
           <label className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
@@ -482,40 +558,37 @@ function DisplayModeSection() {
         <p className="text-[0.625rem] text-muted-foreground">
           If the sermon stops relating to the displayed verse — no
           re-detection or mention of it, and nothing new presented — for this
-          long, the broadcast display fades out on its own.
+          long, outputs with the idle fade switched on fade out on their own.
+          Song lyrics never time out.
         </p>
       </div>
 
-      {/* Fork: what the faded display shows. Applies to the idle fade and
-          the Blank toggle alike; off-air always goes black. */}
-      <div className="flex flex-col gap-2">
-        <label className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-          Idle Display
-        </label>
-        <Select
-          value={idleFadeTarget}
-          onValueChange={(v) => {
-            setIdleFadeTarget(v as "black" | "theme")
-            // Re-emit so an already-faded/blanked output picks the new
-            // look up immediately instead of on the next present.
-            useBroadcastStore.getState().syncBroadcastOutput()
-          }}
-        >
-          <SelectTrigger className="h-8 text-xs">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="black">Black screen</SelectItem>
-            <SelectItem value="theme">Theme background</SelectItem>
-          </SelectContent>
-        </Select>
-        <p className="text-[0.625rem] text-muted-foreground">
-          What the display fades to when idle or blanked: full black, or the
-          active theme&apos;s background and logo with only the text removed.
-          NDI outputs ignore this and always fade to fully transparent, so
-          the video they are keyed over stays unobstructed.
-        </p>
-      </div>
+      <IdleDisplaySection
+        title="Monitor / Projector"
+        enabled={idleFadeEnabled}
+        onEnabledChange={setIdleFadeEnabled}
+        target={idleFadeTarget}
+        onTargetChange={(v) => setIdleFadeTarget(v as IdleFadeTarget)}
+        options={[
+          { value: "theme", label: "Theme background" },
+          { value: "black", label: "Black screen" },
+        ]}
+        help="What a faded or blanked screen shows: the active theme's background and logo with only the text removed, or full black. Turning the output off air always goes black."
+      />
+
+      <IdleDisplaySection
+        title="NDI / Stream"
+        enabled={ndiIdleFadeEnabled}
+        onEnabledChange={setNdiIdleFadeEnabled}
+        target={ndiIdleFadeTarget}
+        onTargetChange={(v) => setNdiIdleFadeTarget(v as NdiIdleFadeTarget)}
+        options={[
+          { value: "transparent", label: "Transparent (keyed out)" },
+          { value: "theme", label: "Theme background" },
+          { value: "black", label: "Black screen" },
+        ]}
+        help="An NDI feed is composited over someone else's video, so transparent is almost always right — anything else paints over the camera. Applies to the Blank toggle too."
+      />
     </div>
   )
 }

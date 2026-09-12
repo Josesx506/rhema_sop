@@ -102,7 +102,7 @@ export const TUTORIAL_STEPS: Step[] = [
     target: '[data-tour="settings"]',
     title: "Settings",
     content:
-      "Configure audio input, Bible translations, display mode (including the idle fade and what a faded display shows), remote control, and API keys.",
+      "Configure audio input, Bible translations, display mode (the idle fade, set separately for the projector and for NDI), remote control, and API keys.",
     placement: "bottom",
   },
 ]

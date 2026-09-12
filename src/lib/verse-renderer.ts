@@ -602,7 +602,8 @@ function drawLogoOverlay(
   // Text reads before hitting the logo when anchored to the right side
   // (e.g. "Streams Of Praise [LOGO]" in the bottom-right corner); otherwise
   // the logo leads.
-  const imageOnRight = overlay.anchor.includes("right") || overlay.anchor === "center"
+  const imageOnRight =
+    overlay.anchor.includes("right") || overlay.anchor === "center"
   const imgX = imageOnRight ? pos.x + groupWidth - imgW : pos.x
   const imgY = pos.y + (groupHeight - imgH) / 2
   ctx.drawImage(img, imgX, imgY, imgW, imgH)
@@ -940,7 +941,10 @@ function buildScaledTheme(
     background: {
       ...theme.background,
       image: theme.background.image
-        ? { ...theme.background.image, blur: theme.background.image.blur * scale }
+        ? {
+            ...theme.background.image,
+            blur: theme.background.image.blur * scale,
+          }
         : null,
     },
     verseText: {
@@ -1044,15 +1048,15 @@ function calculateMaxAvailableVerseHeight(
   }
 }
 
-/** 
+/**
  * Returns the largest verse font size that fits within the available height without overflowing, using binary search.
- * 
- * @param ctx 
- * @param theme 
- * @param verse 
- * @param textRectWidth 
- * @param maxHeight 
- * @returns 
+ *
+ * @param ctx
+ * @param theme
+ * @param verse
+ * @param textRectWidth
+ * @param maxHeight
+ * @returns
  */
 function calculateScaledFontSize(
   ctx: CanvasRenderingContext2D,
@@ -1113,7 +1117,10 @@ export function measureVerseHeight(
   let lineCount = 0
   let widestLine = 0
   for (const flow of handle.flows) {
-    const stats = measureRichInlineStats(flow.prepared, Math.max(1, textRectWidth))
+    const stats = measureRichInlineStats(
+      flow.prepared,
+      Math.max(1, textRectWidth)
+    )
     lineCount += stats.lineCount
     widestLine = Math.max(widestLine, stats.maxLineWidth)
   }
@@ -1199,13 +1206,23 @@ export function computeVerseLayoutMetrics(
   // Text area is anchored within the background region (offsets are already
   // applied to the region itself). At 100% × 100% this matches anchoring to
   // the canvas directly.
-  const innerPos = anchorPosition(layout.anchor, textAreaW, textAreaH, bgW, bgH, 0, 0)
+  const innerPos = anchorPosition(
+    layout.anchor,
+    textAreaW,
+    textAreaH,
+    bgW,
+    bgH,
+    0,
+    0
+  )
   const pos = { x: bgPos.x + innerPos.x, y: bgPos.y + innerPos.y }
 
   const pad = layout.padding
   // The container's own padding insets the text too, so content wraps inside
   // the surface rather than running to its edges.
-  const surfacePad = scaledTheme.textBox.enabled ? scaledTheme.textBox.padding : 0
+  const surfacePad = scaledTheme.textBox.enabled
+    ? scaledTheme.textBox.padding
+    : 0
   const textRectX = pos.x + pad.left + surfacePad
   const textRectY = pos.y + pad.top + surfacePad
   const textRectW = textAreaW - pad.left - pad.right - surfacePad * 2
@@ -1529,6 +1546,8 @@ function renderVerseImpl(
   const metrics = computeVerseLayoutMetrics(ctx, theme, verse, options)
   const scaledTheme = metrics.scaledTheme
 
+  const layer = options?.layer ?? "all"
+
   ctx.save()
 
   // Apply global opacity
@@ -1536,37 +1555,49 @@ function renderVerseImpl(
     ctx.globalAlpha = options.opacity
   }
 
-  // Draw background
-  drawBackground(ctx, scaledTheme, metrics.backgroundRect, options?.imageCache)
-
-  // Draw the logo/watermark overlay — persistent regardless of live-verse
-  // state, drawn under the text box/verse text so live text stays legible.
-  drawLogoOverlay(ctx, scaledTheme, options?.imageCache)
-
-  // The container behind the reference + verse block, then each element's own
-  // plate on top of it. Each scales the alpha already on the context, which
-  // is either options.opacity (set above) or whatever the caller was drawing
-  // at — an output mid-fade, for instance.
-  drawSurface(ctx, scaledTheme.textBox, metrics.textBoxRect, options?.imageCache)
-  if (metrics.referenceSurfaceRect) {
-    drawSurface(
+  if (layer !== "text") {
+    // Draw background
+    drawBackground(
       ctx,
-      scaledTheme.reference.surface,
-      metrics.referenceSurfaceRect,
+      scaledTheme,
+      metrics.backgroundRect,
       options?.imageCache
     )
-  }
-  if (metrics.verseSurfaceRect) {
+
+    // Draw the logo/watermark overlay — persistent regardless of live-verse
+    // state, drawn under the text box/verse text so live text stays legible.
+    drawLogoOverlay(ctx, scaledTheme, options?.imageCache)
+
+    // The container behind the reference + verse block, then each element's own
+    // plate on top of it. Each scales the alpha already on the context, which
+    // is either options.opacity (set above) or whatever the caller was drawing
+    // at — an output mid-fade, for instance.
     drawSurface(
       ctx,
-      scaledTheme.verseText.surface,
-      metrics.verseSurfaceRect,
+      scaledTheme.textBox,
+      metrics.textBoxRect,
       options?.imageCache
     )
+    if (metrics.referenceSurfaceRect) {
+      drawSurface(
+        ctx,
+        scaledTheme.reference.surface,
+        metrics.referenceSurfaceRect,
+        options?.imageCache
+      )
+    }
+    if (metrics.verseSurfaceRect) {
+      drawSurface(
+        ctx,
+        scaledTheme.verseText.surface,
+        metrics.verseSurfaceRect,
+        options?.imageCache
+      )
+    }
   }
 
-  // If no verse data, just draw the background and text box
-  if (!verse) {
+  // Nothing to write: no verse data, or the caller only wanted the scenery.
+  if (!verse || layer === "scenery") {
     ctx.restore()
     return metrics
   }

@@ -24,12 +24,26 @@ export interface VerseRenderData {
   footerLabel?: string
 }
 
+/**
+ * Which half of the scene to paint.
+ *
+ * Fork: splitting them lets a fade cross the text alone. "scenery" is
+ * everything that stays behind — background, logo overlay, the plates behind
+ * the text; "text" is the reference, verse body and footer caption. Painting
+ * scenery at full opacity and text at the fade alpha is the only way to fade
+ * text over a transparent background: a second full pass would re-run
+ * `clearRect` and erase the scenery, and would double-paint semi-transparent
+ * plates on any theme. Default paints both in one pass.
+ */
+export type RenderLayer = "all" | "scenery" | "text"
+
 export interface RenderOptions {
   opacity?: number
   offsetX?: number
   offsetY?: number
   scale?: number               // Scale factor for rendering at display size (e.g., 0.42 for 400px panel)
   imageCache?: Map<string, HTMLImageElement>
+  layer?: RenderLayer
 }
 
 /** A freely positioned element region, all values in % of canvas size (0-100), x/y = top-left. */

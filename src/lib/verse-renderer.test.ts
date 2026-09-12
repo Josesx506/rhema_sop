@@ -370,6 +370,50 @@ describe("fade composition", () => {
   })
 })
 
+describe("render layers", () => {
+  const lowerThirds = () => BUILTIN_THEMES[2]
+
+  it("scenery paints the plate but writes no text", () => {
+    const { ctx, calls } = recordingCtx()
+    renderVerse(ctx, lowerThirds(), VERSE, { layer: "scenery" })
+    expect(calls.some((c) => c.method === "fill")).toBe(true)
+    expect(calls.some((c) => c.method === "fillText")).toBe(false)
+  })
+
+  it("text writes the verse without touching the background or plate", () => {
+    const { ctx, calls } = recordingCtx()
+    renderVerse(ctx, lowerThirds(), VERSE, { layer: "text" })
+    expect(calls.some((c) => c.method === "fillText")).toBe(true)
+    // Lower Thirds clears the frame for its transparent background — the text
+    // layer must not, or it would erase the scenery drawn under it.
+    expect(calls.some((c) => c.method === "clearRect")).toBe(false)
+    expect(calls.some((c) => c.method === "fill")).toBe(false)
+  })
+
+  it("scenery + text together draw what one combined pass draws", () => {
+    const combined = recordingCtx()
+    renderVerse(combined.ctx, lowerThirds(), VERSE)
+    const split = recordingCtx()
+    renderVerse(split.ctx, lowerThirds(), VERSE, { layer: "scenery" })
+    renderVerse(split.ctx, lowerThirds(), VERSE, { layer: "text" })
+
+    const methods = (calls: { method: string }[]) => calls.map((c) => c.method)
+    // save/restore bracket each call, so the split run has one extra pair.
+    const strip = (names: string[]) =>
+      names.filter((n) => n !== "save" && n !== "restore")
+    expect(strip(methods(split.calls))).toEqual(strip(methods(combined.calls)))
+  })
+
+  it("paints a plate exactly once across the two layers", () => {
+    const { ctx, calls } = recordingCtx()
+    renderVerse(ctx, lowerThirds(), VERSE, { layer: "scenery" })
+    renderVerse(ctx, lowerThirds(), VERSE, { layer: "text" })
+    // The old two-full-pass fade drew the 70% plate twice, darkening the band
+    // mid-fade on every theme that had one.
+    expect(calls.filter((c) => c.method === "fill")).toHaveLength(1)
+  })
+})
+
 describe("surface fills", () => {
   const BAND_IMAGE = "data:image/png;base64,band"
 

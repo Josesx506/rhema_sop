@@ -96,7 +96,100 @@ describe("broadcast store sync", () => {
     )
   })
 
-  it("always fades an NDI output to transparent, live or not", async () => {
+  it("switching a kind's idle fade off sends it a zero timeout", async () => {
+    const { useBroadcastStore } = await import("./broadcast-store")
+    const { useSettingsStore } = await import("./settings-store")
+    const theme = useBroadcastStore.getState().themes[0]
+    useSettingsStore.setState({
+      idleFadeMs: 45_000,
+      idleFadeEnabled: true,
+      ndiIdleFadeEnabled: false,
+    })
+    useBroadcastStore.setState({
+      isLive: true,
+      liveVerse: sampleLiveVerse,
+      outputs: [
+        {
+          id: "main",
+          name: "Main Display",
+          type: "display",
+          themeId: theme.id,
+          monitorIndex: 0,
+          ndi: { ...ndiDefaults },
+        },
+        {
+          id: "stream",
+          name: "Stream",
+          type: "ndi",
+          themeId: theme.id,
+          monitorIndex: 0,
+          ndi: { ...ndiDefaults, sourceName: "Rhema Stream" },
+        },
+      ],
+    })
+
+    emitToMock.mockClear()
+    useBroadcastStore.getState().syncBroadcastOutput()
+
+    const timeouts = Object.fromEntries(
+      emitToMock.mock.calls.map(([label, , payload]) => [label, payload.idleFadeMs]),
+    )
+    // 0 means "never fade" to the output window; the projector keeps timing
+    // out while the overlay stays up until the operator blanks it.
+    expect(timeouts).toEqual({ "broadcast-main": 45_000, "broadcast-stream": 0 })
+  })
+
+  it("keeps song blocks up regardless of the idle-fade switches", async () => {
+    const { useBroadcastStore } = await import("./broadcast-store")
+    const { useSettingsStore } = await import("./settings-store")
+    useSettingsStore.setState({ idleFadeMs: 45_000, idleFadeEnabled: true })
+    useBroadcastStore.setState({
+      isLive: true,
+      liveVerse: { ...sampleLiveVerse, noAutoFade: true },
+    })
+
+    emitToMock.mockClear()
+    useBroadcastStore.getState().syncBroadcastOutput()
+    expect(emitToMock).toHaveBeenCalledWith(
+      "broadcast-main",
+      "broadcast:verse-update",
+      expect.objectContaining({ idleFadeMs: 0 }),
+    )
+  })
+
+  it("takes each output kind's fade target from its own setting", async () => {
+    const { useBroadcastStore } = await import("./broadcast-store")
+    const { useSettingsStore } = await import("./settings-store")
+    useSettingsStore.setState({
+      idleFadeTarget: "black",
+      ndiIdleFadeTarget: "theme",
+    })
+    const theme = useBroadcastStore.getState().themes[0]
+    useBroadcastStore.setState({
+      isLive: true,
+      liveVerse: sampleLiveVerse,
+      outputs: [
+        {
+          id: "stream",
+          name: "Stream",
+          type: "ndi",
+          themeId: theme.id,
+          monitorIndex: 0,
+          ndi: { ...ndiDefaults, sourceName: "Rhema Stream" },
+        },
+      ],
+    })
+
+    emitToMock.mockClear()
+    useBroadcastStore.getState().syncBroadcastOutput()
+    expect(emitToMock).toHaveBeenCalledWith(
+      "broadcast-stream",
+      "broadcast:verse-update",
+      expect.objectContaining({ idleFadeTarget: "theme" }),
+    )
+  })
+
+  it("defaults an NDI output to transparent, live or not", async () => {
     const { useBroadcastStore } = await import("./broadcast-store")
     const { useSettingsStore } = await import("./settings-store")
     useSettingsStore.setState({ idleFadeTarget: "theme" })

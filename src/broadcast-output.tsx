@@ -190,14 +190,18 @@ function BroadcastCanvas() {
     }
 
     const alpha = currentAlpha()
-    // Fork fade-to-theme: keep the background + logo solid underneath so
-    // the fade only takes the text away. The verse pass then repaints the
-    // identical background over itself, leaving just the text at fade
-    // alpha. Skipped at alpha 1 — the verse pass alone is the same frame.
-    if (fadeTarget === "theme" && alpha < 1) {
-      renderVerse(ctx, theme, null, {
+    // Fork fade-to-theme: the scenery (background, logo, plates) stays solid
+    // and only the text crosses the fade. Two half-passes rather than two
+    // full ones — a second full pass would re-run the renderer's clearRect on
+    // a transparent background and erase the scenery underneath, and would
+    // paint every semi-transparent plate twice. Skipped at alpha 1, where one
+    // combined pass is the same frame.
+    const split = fadeTarget === "theme" && alpha < 1
+    if (split) {
+      renderVerse(ctx, theme, verse, {
         scale: 1,
         imageCache: themeImageCache(),
+        layer: "scenery",
       })
     }
     ctx.globalAlpha = alpha
@@ -205,6 +209,7 @@ function BroadcastCanvas() {
     const result = renderVerse(ctx, theme, verse, {
       scale: 1,
       imageCache: themeImageCache(),
+      layer: split ? "text" : "all",
     })
     ctx.globalAlpha = 1
     if (!result) {

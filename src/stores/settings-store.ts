@@ -3,9 +3,16 @@ import { load, type Store } from "@tauri-apps/plugin-store"
 
 type SttProvider = "deepgram" | "whisper"
 
-/** Fork: what the output shows when faded out (idle fade or operator
- * blank) — full black, or the active theme's background + logo. */
+/** Fork: what a monitor or projector shows when faded out (idle fade or
+ * operator blank) — full black, or the active theme's background + logo. */
 export type IdleFadeTarget = "black" | "theme"
+
+/**
+ * Fork: the same for an NDI feed, which additionally can key out entirely.
+ * "transparent" is the default and the only value that leaves the video the
+ * feed is composited over untouched.
+ */
+export type NdiIdleFadeTarget = "transparent" | "black" | "theme"
 
 interface SettingsState {
   deepgramApiKey: string | null
@@ -16,8 +23,18 @@ interface SettingsState {
   autoMode: boolean
   confidenceThreshold: number
   cooldownMs: number
+  /** How long content sits idle before it fades. Shared by both output
+   * kinds; each kind decides whether to act on it. */
   idleFadeMs: number
+  /** Fork: unprefixed idle-fade settings govern monitor/projector outputs —
+   * the key names predate NDI getting its own pair, and renaming them would
+   * silently reset every existing install's preference. */
+  idleFadeEnabled: boolean
   idleFadeTarget: IdleFadeTarget
+  /** Fork: NDI feeds fade independently — an overlay is often wanted up until
+   * the operator blanks it, even while the projector times out. */
+  ndiIdleFadeEnabled: boolean
+  ndiIdleFadeTarget: NdiIdleFadeTarget
   onboardingComplete: boolean
   sttProvider: SttProvider
   /** Fork: ggml model file used by the local Whisper provider. */
@@ -32,7 +49,10 @@ interface SettingsState {
   setConfidenceThreshold: (threshold: number) => void
   setCooldownMs: (ms: number) => void
   setIdleFadeMs: (ms: number) => void
+  setIdleFadeEnabled: (enabled: boolean) => void
   setIdleFadeTarget: (target: IdleFadeTarget) => void
+  setNdiIdleFadeEnabled: (enabled: boolean) => void
+  setNdiIdleFadeTarget: (target: NdiIdleFadeTarget) => void
   setOnboardingComplete: (complete: boolean) => void
   setSttProvider: (provider: SttProvider) => void
   setWhisperModel: (model: string) => void
@@ -48,7 +68,10 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   confidenceThreshold: 0.8,
   cooldownMs: 2500,
   idleFadeMs: 60_000,
+  idleFadeEnabled: true,
   idleFadeTarget: "theme",
+  ndiIdleFadeEnabled: true,
+  ndiIdleFadeTarget: "transparent",
   onboardingComplete: false,
   sttProvider: "deepgram",
   whisperModel: "ggml-large-v3-turbo-q8_0.bin",
@@ -62,7 +85,10 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   setConfidenceThreshold: (confidenceThreshold) => set({ confidenceThreshold }),
   setCooldownMs: (cooldownMs) => set({ cooldownMs }),
   setIdleFadeMs: (idleFadeMs) => set({ idleFadeMs }),
+  setIdleFadeEnabled: (idleFadeEnabled) => set({ idleFadeEnabled }),
   setIdleFadeTarget: (idleFadeTarget) => set({ idleFadeTarget }),
+  setNdiIdleFadeEnabled: (ndiIdleFadeEnabled) => set({ ndiIdleFadeEnabled }),
+  setNdiIdleFadeTarget: (ndiIdleFadeTarget) => set({ ndiIdleFadeTarget }),
   setOnboardingComplete: (onboardingComplete) => set({ onboardingComplete }),
   setSttProvider: (sttProvider) => set({ sttProvider }),
   setWhisperModel: (whisperModel) => set({ whisperModel }),
@@ -78,7 +104,10 @@ const PERSISTED_KEYS = [
   "confidenceThreshold",
   "cooldownMs",
   "idleFadeMs",
+  "idleFadeEnabled",
   "idleFadeTarget",
+  "ndiIdleFadeEnabled",
+  "ndiIdleFadeTarget",
   "onboardingComplete",
   "sttProvider",
   "whisperModel",

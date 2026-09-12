@@ -27,6 +27,7 @@ export function LiveOutputPanel() {
   const themes = useBroadcastStore((s) => s.themes)
   const activeThemeId = useBroadcastStore((s) => s.activeThemeId)
   const idleFadeMs = useSettingsStore((s) => s.idleFadeMs)
+  const idleFadeEnabled = useSettingsStore((s) => s.idleFadeEnabled)
   const activeTranslationId = useBibleStore((s) => s.activeTranslationId)
 
   const activeTheme = themes.find((t) => t.id === activeThemeId) ?? themes[0]
@@ -53,13 +54,15 @@ export function LiveOutputPanel() {
       idleTimerRef.current = null
     }
     setFaded(false)
-    if (verseData && !verseData.noAutoFade) {
+    // The mirror stands in for the projector, so it follows the display
+    // output's switch — not the NDI one.
+    if (verseData && !verseData.noAutoFade && idleFadeEnabled) {
       idleTimerRef.current = setTimeout(() => setFaded(true), idleFadeMs)
     }
     return () => {
       if (idleTimerRef.current) clearTimeout(idleTimerRef.current)
     }
-  }, [verseData, idleFadeMs])
+  }, [verseData, idleFadeMs, idleFadeEnabled])
 
   // Refetch the live verse when the translation changes so the live output
   // text follows the new translation. Updates the live output only — the
