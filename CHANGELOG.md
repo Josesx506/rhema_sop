@@ -2,6 +2,19 @@
 
 Fork releases of Rhema (rhema_sop). Dates are release dates.
 
+## Unreleased
+
+### Added
+
+- **The song catalog is sorted alphabetically**, with a sort button in the
+  panel header to flip between A–Z and newest-first. Imports used to land at
+  the bottom in insertion order, which stops being findable at a few hundred
+  songs; newest-first is there for the opposite case, right after adding or
+  importing. Titles collate case-insensitively and numerically ("Psalm 2"
+  before "Psalm 10"), with artist as the tiebreak. The choice is session-only,
+  and only the view is reordered — exports, dedupe and setlist resolution
+  still see the catalog in insertion order.
+
 ## 0.4.3 — 2026-09-12
 
 ### Added

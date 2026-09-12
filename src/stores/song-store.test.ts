@@ -176,6 +176,72 @@ describe("song store catalog CRUD", () => {
   })
 })
 
+describe("catalog ordering", () => {
+  beforeEach(() => {
+    vi.resetModules()
+  })
+
+  it("sorts by title case-insensitively and numerically", async () => {
+    const { sortCatalog } = await import("./song-store")
+    const songs = [
+      makeSong({ title: "Psalm 10" }),
+      makeSong({ title: "amazing grace" }),
+      makeSong({ title: "Psalm 2" }),
+      makeSong({ title: "Blessed Assurance" }),
+    ]
+    expect(sortCatalog([...songs], "title").map((s) => s.title)).toEqual([
+      "amazing grace",
+      "Blessed Assurance",
+      // Numeric collation, so 2 comes before 10 rather than after.
+      "Psalm 2",
+      "Psalm 10",
+    ])
+  })
+
+  it("breaks title ties on artist so same-named songs keep a stable order", async () => {
+    const { sortCatalog } = await import("./song-store")
+    const songs = [
+      makeSong({ title: "Glory", artist: "Wesley" }),
+      makeSong({ title: "Glory", artist: "Crosby" }),
+    ]
+    expect(sortCatalog([...songs], "title").map((s) => s.artist)).toEqual([
+      "Crosby",
+      "Wesley",
+    ])
+  })
+
+  it("sorts newest first by created time, so a fresh import is on top", async () => {
+    const { sortCatalog } = await import("./song-store")
+    const songs = [
+      makeSong({ title: "Older", createdAt: 100 }),
+      makeSong({ title: "Newest", createdAt: 300 }),
+      makeSong({ title: "Middle", createdAt: 200 }),
+    ]
+    expect(sortCatalog([...songs], "recent").map((s) => s.title)).toEqual([
+      "Newest",
+      "Middle",
+      "Older",
+    ])
+  })
+
+  it("falls back to title when songs were created in the same import", async () => {
+    const { sortCatalog } = await import("./song-store")
+    const songs = [
+      makeSong({ title: "Zion", createdAt: 100 }),
+      makeSong({ title: "Abide", createdAt: 100 }),
+    ]
+    expect(sortCatalog([...songs], "recent").map((s) => s.title)).toEqual([
+      "Abide",
+      "Zion",
+    ])
+  })
+
+  it("defaults to alphabetical", async () => {
+    const { useSongStore } = await import("./song-store")
+    expect(useSongStore.getState().catalogSort).toBe("title")
+  })
+})
+
 describe("song store setlist", () => {
   beforeEach(() => {
     vi.resetModules()

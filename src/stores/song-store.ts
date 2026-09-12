@@ -38,6 +38,10 @@ interface SongState {
    * Returns a summary for the operator toast. */
   importSongs: (songs: Song[]) => { added: number; duplicates: number }
   setSearchQuery: (query: string) => void
+  /** Catalog list order (session-only). Alphabetical by default: insertion
+   * order buried every import at the bottom of a few hundred songs. */
+  catalogSort: CatalogSort
+  setCatalogSort: (sort: CatalogSort) => void
 
   // Setlist
   addSongToSetlist: (songId: string) => void
@@ -79,6 +83,34 @@ export function matchesSearch(song: Song, query: string): boolean {
   if (song.title.toLowerCase().includes(q)) return true
   if (song.artist.toLowerCase().includes(q)) return true
   return song.sections.some((section) => section.lines.some((line) => line.toLowerCase().includes(q)))
+}
+
+/**
+ * Alphabetical catalog order. Locale-aware and case-insensitive, numeric so
+ * "Psalm 2" precedes "Psalm 10", with artist as a stable tiebreak for
+ * same-named songs. Leading articles are deliberately not stripped — "The
+ * Solid Rock" filing under S would surprise anyone scrolling for it.
+ */
+export function compareSongsByTitle(a: Song, b: Song): number {
+  const byTitle = a.title.localeCompare(b.title, undefined, {
+    sensitivity: "base",
+    numeric: true,
+  })
+  if (byTitle !== 0) return byTitle
+  return a.artist.localeCompare(b.artist, undefined, { sensitivity: "base" })
+}
+
+/** Newest first — what you want right after adding or importing songs. */
+export function compareSongsByRecent(a: Song, b: Song): number {
+  return b.createdAt - a.createdAt || compareSongsByTitle(a, b)
+}
+
+/** Order the catalog list is displayed in. Session-only: a sort preference
+ * is a "right now" choice, not something to restore three weeks later. */
+export type CatalogSort = "title" | "recent"
+
+export function sortCatalog(songs: Song[], sort: CatalogSort): Song[] {
+  return songs.sort(sort === "recent" ? compareSongsByRecent : compareSongsByTitle)
 }
 
 function flattenSetlistBlocks(setlist: SetlistEntry[]): FlatBlockRef[] {
@@ -125,6 +157,8 @@ export const useSongStore = create<SongState>((set, get) => ({
     return summary
   },
   setSearchQuery: (searchQuery) => set({ searchQuery }),
+  catalogSort: "title",
+  setCatalogSort: (catalogSort) => set({ catalogSort }),
 
   allowSetlistDuplicates: false,
   setAllowSetlistDuplicates: (allowSetlistDuplicates) => set({ allowSetlistDuplicates }),

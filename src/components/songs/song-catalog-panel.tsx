@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog"
 import { readFile } from "@tauri-apps/plugin-fs"
@@ -23,6 +23,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import {
+  ArrowDownAZIcon,
+  ClockIcon,
   DownloadIcon,
   ListPlusIcon,
   PencilIcon,
@@ -32,7 +34,12 @@ import {
   UploadIcon,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { hydrateSongCatalog, matchesSearch, useSongStore } from "@/stores/song-store"
+import {
+  hydrateSongCatalog,
+  matchesSearch,
+  sortCatalog,
+  useSongStore,
+} from "@/stores/song-store"
 import { exportCatalog, importCatalogFile } from "@/lib/songs/catalog-file"
 import { parseOpenLyrics, parseOpenSong, parsePlainText, type ParsedSong } from "@/lib/songs/import-parsers"
 import { importProBundleFile } from "@/lib/songs/probundle-import"
@@ -115,6 +122,7 @@ function SongRow({
 export function SongCatalogPanel() {
   const songs = useSongStore((s) => s.songs)
   const searchQuery = useSongStore((s) => s.searchQuery)
+  const catalogSort = useSongStore((s) => s.catalogSort)
 
   const [editorOpen, setEditorOpen] = useState(false)
   const [editingSong, setEditingSong] = useState<Song | null>(null)
@@ -136,7 +144,14 @@ export function SongCatalogPanel() {
     }
   }, [])
 
-  const filtered = songs.filter((song) => matchesSearch(song, searchQuery))
+  // Sorting the view rather than the store keeps insertion order intact for
+  // everything that depends on it (exports, dedupe, setlist resolution).
+  // filter() already returns a fresh array, so the sort is not in place on
+  // the store's own list.
+  const filtered = useMemo(
+    () => sortCatalog(songs.filter((song) => matchesSearch(song, searchQuery)), catalogSort),
+    [songs, searchQuery, catalogSort]
+  )
 
   const openEditorForNewSong = () => {
     setEditingSong(null)
@@ -236,6 +251,26 @@ export function SongCatalogPanel() {
     >
       <PanelHeader title="Song catalog">
         <div className="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            title={
+              catalogSort === "title"
+                ? "Sorted A–Z — switch to newest first"
+                : "Sorted newest first — switch to A–Z"
+            }
+            onClick={() =>
+              useSongStore
+                .getState()
+                .setCatalogSort(catalogSort === "title" ? "recent" : "title")
+            }
+          >
+            {catalogSort === "title" ? (
+              <ArrowDownAZIcon className="size-3.5" />
+            ) : (
+              <ClockIcon className="size-3.5" />
+            )}
+          </Button>
           <Button variant="ghost" size="xs" onClick={openEditorForNewSong}>
             <PlusIcon className="size-3" />
             Add song
