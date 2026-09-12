@@ -722,17 +722,21 @@ function fillRoundRect(
 /**
  * Paint one surface — the container behind a block of text: a colour wash and
  * then, if set, an image filling the same rect.
+ *
+ * The surface opacity SCALES whatever alpha the caller is already drawing at
+ * rather than replacing it. Replacing it meant a plate ignored the output's
+ * fade entirely: blanking an NDI lower third took the text away but left its
+ * 70%-black band sitting on the camera.
  */
 function drawSurface(
   ctx: CanvasRenderingContext2D,
   surface: SurfaceFill | undefined,
   rect: VerseLayoutRect,
-  baseOpacity: number,
   imageCache?: Map<string, HTMLImageElement>
 ): void {
   if (!surface?.enabled) return
   ctx.save()
-  ctx.globalAlpha = baseOpacity * surface.opacity
+  ctx.globalAlpha *= surface.opacity
   ctx.fillStyle = surface.color
   fillRoundRect(ctx, rect, surface.borderRadius)
   if (surface.image) {
@@ -1540,21 +1544,15 @@ function renderVerseImpl(
   drawLogoOverlay(ctx, scaledTheme, options?.imageCache)
 
   // The container behind the reference + verse block, then each element's own
-  // plate on top of it.
-  const baseOpacity = options?.opacity ?? 1
-  drawSurface(
-    ctx,
-    scaledTheme.textBox,
-    metrics.textBoxRect,
-    baseOpacity,
-    options?.imageCache
-  )
+  // plate on top of it. Each scales the alpha already on the context, which
+  // is either options.opacity (set above) or whatever the caller was drawing
+  // at — an output mid-fade, for instance.
+  drawSurface(ctx, scaledTheme.textBox, metrics.textBoxRect, options?.imageCache)
   if (metrics.referenceSurfaceRect) {
     drawSurface(
       ctx,
       scaledTheme.reference.surface,
       metrics.referenceSurfaceRect,
-      baseOpacity,
       options?.imageCache
     )
   }
@@ -1563,7 +1561,6 @@ function renderVerseImpl(
       ctx,
       scaledTheme.verseText.surface,
       metrics.verseSurfaceRect,
-      baseOpacity,
       options?.imageCache
     )
   }

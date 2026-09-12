@@ -233,10 +233,13 @@ describe("computeVerseLayoutMetrics — stacked mode", () => {
  */
 function recordingCtx(): {
   ctx: CanvasRenderingContext2D
-  calls: { method: string; args: unknown[] }[]
+  calls: { method: string; args: unknown[]; alpha: number }[]
 } {
-  const calls: { method: string; args: unknown[] }[] = []
-  const props: Record<string | symbol, unknown> = { font: "16px test" }
+  const calls: { method: string; args: unknown[]; alpha: number }[] = []
+  const props: Record<string | symbol, unknown> = { font: "16px test", globalAlpha: 1 }
+  // save/restore are modelled for real: drawing code sets alpha inside a
+  // save block and expects the previous value back afterwards.
+  const stack: Record<string | symbol, unknown>[] = []
   const ctx = new Proxy(
     {},
     {
@@ -251,7 +254,15 @@ function recordingCtx(): {
         }
         if (prop in props) return props[prop]
         return (...args: unknown[]) => {
-          calls.push({ method: String(prop), args })
+          calls.push({ method: String(prop), args, alpha: Number(props.globalAlpha) })
+          if (prop === "save") stack.push({ ...props })
+          if (prop === "restore") {
+            const previous = stack.pop()
+            if (previous) {
+              for (const key of Object.keys(props)) delete props[key]
+              Object.assign(props, previous)
+            }
+          }
         }
       },
       set(_target, prop, value) {
@@ -315,6 +326,47 @@ describe("computeVerseLayoutMetrics — text box backdrop", () => {
     ).toBe(
       true
     )
+  })
+})
+
+describe("fade composition", () => {
+  // Lower Thirds: a transparent background with a 70%-black plate behind the
+  // text. The plate is what an NDI receiver keys over live video.
+  const lowerThirds = () => BUILTIN_THEMES[2]
+
+  /** Alpha the container plate was actually painted at. */
+  function plateAlpha(calls: { method: string; alpha: number }[]): number | undefined {
+    return calls.find((c) => c.method === "fill")?.alpha
+  }
+
+  it("scales a plate by the alpha the caller is already drawing at", () => {
+    const { ctx, calls } = recordingCtx()
+    ctx.globalAlpha = 0.5
+    renderVerse(ctx, lowerThirds(), VERSE)
+    expect(plateAlpha(calls)).toBeCloseTo(0.5 * 0.7, 5)
+  })
+
+  it("leaves nothing of the plate once the output has faded out", () => {
+    const { ctx, calls } = recordingCtx()
+    ctx.globalAlpha = 0
+    renderVerse(ctx, lowerThirds(), null)
+    // Blanking an NDI lower third used to strip the text but leave this band
+    // sitting on the camera, because the plate replaced the fade alpha with
+    // its own opacity instead of scaling it.
+    expect(plateAlpha(calls)).toBe(0)
+  })
+
+  it("still honours an explicit render opacity", () => {
+    const { ctx, calls } = recordingCtx()
+    renderVerse(ctx, lowerThirds(), VERSE, { opacity: 0.4 })
+    expect(plateAlpha(calls)).toBeCloseTo(0.4 * 0.7, 5)
+  })
+
+  it("restores the caller's alpha after drawing", () => {
+    const { ctx } = recordingCtx()
+    ctx.globalAlpha = 0.5
+    renderVerse(ctx, lowerThirds(), VERSE)
+    expect(ctx.globalAlpha).toBe(0.5)
   })
 })
 
@@ -523,10 +575,12 @@ describe("computeVerseLayoutMetrics — background region", () => {
     const { ctx, calls } = recordingCtx()
     renderVerse(ctx, theme, VERSE)
     const fills = calls.filter((c) => c.method === "fillRect")
-    expect(fills).toContainEqual({
-      method: "fillRect",
-      args: [0, 756, 1920, 324],
-    })
+    expect(fills).toContainEqual(
+      expect.objectContaining({
+        method: "fillRect",
+        args: [0, 756, 1920, 324],
+      })
+    )
     expect(
       fills.some((c) => c.args[2] === 1920 && c.args[3] === 1080)
     ).toBe(false)

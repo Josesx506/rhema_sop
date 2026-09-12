@@ -15,6 +15,12 @@ Fork releases of Rhema (rhema_sop). Dates are release dates.
   every NDI output fades to fully transparent rather than to black or the
   theme background — whatever the Idle Display setting says, which now only
   governs display outputs.
+- **A theme's plate now fades with everything else.** `drawSurface` set the
+  canvas alpha to the surface's own opacity instead of scaling the alpha
+  already in force, so the Lower Thirds band ignored the fade completely —
+  blanking an NDI feed took the text away and left a 70%-black box on the
+  camera. Plates now compose with the output's fade (and with an explicit
+  render opacity), so a blanked or idle overlay leaves the video clean.
 - **Slides and videos no longer black out an overlay feed.** Presentation
   content used to fill the entire frame on every output. It is now confined
   to the theme's background region, and a theme with a transparent
