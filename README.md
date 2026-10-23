@@ -193,7 +193,7 @@ The delete matters: setup skips any artifact that already exists, so a stale ind
 
 #### Speech-to-Text Options
 
-Rhema supports two speech-to-text engines:
+Rhema supports three speech-to-text engines:
 
 **Option 1: Whisper (Local, Free)**
 Whisper runs locally on your machine with no API costs or per-minute billing.
@@ -208,6 +208,39 @@ DEEPGRAM_API_KEY=your_key_here
 ```
 
 Get your API key at [deepgram.com](https://deepgram.com/)
+
+**Option 3: Bark (Local, Free, macOS only)**
+See [Local Bark STT (macOS)](#local-bark-stt-macos) below.
+
+### Local Bark STT (macOS)
+
+A third provider runs [Underdog Bark 3.0](https://huggingface.co/FluidInference/bark-3.0-coreml) on the Apple Neural Engine through [FluidAudio](https://github.com/FluidInference/FluidAudio). It is English only, needs macOS 15 or later on Apple Silicon, and transcribes roughly 140x faster than real time. The provider is hidden on Windows and Linux, where nothing changes.
+
+The Rust side talks to a small Swift sidecar (`src-tauri/sidecars/bark-sidecar/`), because FluidAudio is a Swift package. Building the sidecar needs a Swift 6 toolchain (Xcode 16 or later).
+
+1. Download the Core ML model (about 437 MB) into `models/bark/bark-3.0/`. The GPU-only `Encoder_lut3.mlmodelc` is skipped; pass `--dry-run` to list the files without fetching them:
+
+   ```bash
+   bun run download:bark
+   ```
+
+   The built app can also download the model from Settings; it lands in app data, not in the repo.
+
+2. Build the sidecar. It is written to `src-tauri/binaries/bark-sidecar-aarch64-apple-darwin`, where both `tauri dev` and the production bundle pick it up. The sidecar is a Tauri `externalBin`, so on a Mac without it the app's build script writes a small placeholder there (with a `cargo:warning`) so `cargo` and `tauri` builds still work; selecting Bark then reports "Bark sidecar not built" until you run:
+
+   ```bash
+   bun run build:bark-sidecar
+   ```
+
+3. Start the app, open Settings -> Speech Recognition and select **Local (Bark)**. The first start can take a few minutes while Core ML compiles the encoder for the Neural Engine; later starts are quick.
+
+To benchmark the model on a recording without the app, run the sidecar in one-shot mode. It prints the transcript, word count, audio duration, inference time and RTFx:
+
+```bash
+src-tauri/binaries/bark-sidecar-aarch64-apple-darwin --model-dir models/bark/bark-3.0 --file sermon.wav
+```
+
+The sidecar is model-agnostic: point `--model-dir` at a sibling Parakeet folder (for example `FluidInference/parakeet-ultra-coreml` downloaded into `models/bark/parakeet-ultra`) to compare models on the same file.
 
 ### NDI SDK (optional)
 
@@ -225,6 +258,8 @@ Each phase can also be run independently:
 bun run download:bible-data          # Bundled translations + cross-refs
 bun run build:bible                  # Build SQLite database
 bun run download:whisper             # Whisper STT model
+bun run download:bark                # Bark STT model (macOS only)
+bun run build:bark-sidecar           # Bark Swift sidecar (macOS only)
 
 # Embedding re-ranking assets (optional — see above):
 bun run download:model               # Download & export ONNX model
@@ -311,6 +346,8 @@ rhema/
 | `precompute:embeddings-py` | Precompute embeddings via Python sentence-transformers (GPU path) |
 | `quantize:model` | Quantize ONNX model to INT8 for ARM64 |
 | `download:whisper` | Download `ggml-large-v3-turbo-q8_0.bin` for local Whisper STT |
+| `download:bark` | Download the Underdog Bark 3.0 Core ML model for local Bark STT (macOS only; `--dry-run` lists files) |
+| `build:bark-sidecar` | Build the Swift FluidAudio sidecar into `src-tauri/binaries/` (macOS only) |
 | `download:ndi-sdk` | Download NDI 6 SDK headers and platform libraries |
 | `web:dev`, `web:build`, `web:start`, `web:lint` | Marketing + Fumadocs documentation site under `web/` |
 
@@ -324,4 +361,13 @@ Create a `.env` file in the project root (optional):
 
 | Variable | Required | Description |
 |---|---|---|
-| `DEEPGRAM_API_KEY` | Optional | API key for Deepgram speech-to-text (not needed if using Whisper) |
+| `DEEPGRAM_API_KEY` | Optional | API key for Deepgram speech-to-text (not needed if using Whisper or Bark) |
+
+## Credits
+
+Speech recognition in Rhema builds on the work of others:
+
+- **[Underdog Bark 3.0](https://huggingface.co/conway-research/underdog-bark-3.0)** by Conway Research (CC-BY-4.0): the English ASR model behind the local Bark provider. It is fine-tuned from Moondream's **[parakeet-ultra](https://huggingface.co/moondream/parakeet-ultra)** (CC-BY-4.0), which in turn derives from NVIDIA's **[Parakeet TDT 0.6B v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3)** (CC-BY-4.0).
+- **[Fluid Inference](https://huggingface.co/FluidInference/bark-3.0-coreml)** for the Core ML conversion of Bark 3.0 (CC-BY-4.0), and **[FluidAudio](https://github.com/FluidInference/FluidAudio)** (Apache-2.0), the Swift runtime that drives it on the Apple Neural Engine.
+- **[Whisper](https://github.com/openai/whisper)** by OpenAI (MIT), run locally through [whisper.cpp](https://github.com/ggerganov/whisper.cpp) and [whisper-rs](https://github.com/tazz4843/whisper-rs).
+- **[Deepgram](https://deepgram.com/)** Nova-3 for cloud streaming transcription.

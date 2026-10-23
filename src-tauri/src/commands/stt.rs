@@ -118,6 +118,34 @@ pub async fn start_transcription(
                 "Whisper support not compiled. Rebuild with --features whisper".into(),
             );
         }
+        #[cfg(all(feature = "bark", target_os = "macos"))]
+        "bark" => {
+            // Fork: Underdog Bark 3.0 through the FluidAudio sidecar. The
+            // model directory resolves like Whisper (dev tree, app-data,
+            // bundled); the sidecar is the dev-tree build or the externalBin
+            // copy next to the app executable.
+            let (model_dir, model_source) = super::bark_model::resolve_bark_model(&app)
+                .ok_or_else(|| {
+                    "Bark model not found. Download it in Settings → Speech Recognition."
+                        .to_string()
+                })?;
+            log::info!("[STT-bark] Model resolved from {model_source}");
+            let sidecar_path = super::bark_model::resolve_bark_sidecar().ok_or_else(|| {
+                "Bark sidecar not found. Run: bun run build:bark-sidecar".to_string()
+            })?;
+
+            log::info!(
+                "Starting Bark transcription: model={}, sidecar={}, device_id={device_id:?}",
+                model_dir.display(),
+                sidecar_path.display()
+            );
+
+            Box::new(rhema_stt::BarkProvider::new(sidecar_path, model_dir))
+        }
+        #[cfg(not(all(feature = "bark", target_os = "macos")))]
+        "bark" => {
+            return Err("Bark is only available on macOS".into());
+        }
         _ => {
             // Deepgram (default)
             let resolved_api_key = if api_key.is_empty() {

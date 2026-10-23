@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core"
 import { Button } from "@/components/ui/button"
 import { DiagnosticsSection } from "@/components/settings/diagnostics-section"
 import { WhisperModelSection } from "@/components/settings/whisper-model-section"
+import { BarkModelSection } from "@/components/settings/bark-model-section"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import {
@@ -49,10 +50,11 @@ import {
 import { LevelMeter } from "@/components/ui/level-meter"
 import { useAudioTest } from "@/hooks/use-audio-test"
 import { useSettingsStore, useBroadcastStore } from "@/stores"
-import type { IdleFadeTarget, NdiIdleFadeTarget } from "@/stores/settings-store"
+import type { IdleFadeTarget, NdiIdleFadeTarget, SttProvider } from "@/stores/settings-store"
 import { useTranscriptStore } from "@/stores/transcript-store"
 import { useTutorialStore } from "@/stores/tutorial-store"
 import { useSettingsDialogStore } from "@/lib/settings-dialog"
+import { isMacOS } from "@/lib/platform"
 import { REMOTE_EVENTS } from "@/lib/remote-events"
 import type { DeviceInfo } from "@/types/audio"
 
@@ -275,7 +277,7 @@ function SpeechSection() {
 
         <RadioGroup
           value={sttProvider}
-          onValueChange={(v) => setSttProvider(v as "deepgram" | "whisper")}
+          onValueChange={(v) => setSttProvider(v as SttProvider)}
           className="gap-3"
         >
           {/* Deepgram (cloud) */}
@@ -315,6 +317,28 @@ function SpeechSection() {
               </p>
             </div>
           </label>
+
+          {/* Fork: Bark (local, macOS only). Hidden elsewhere because the
+              sidecar is Swift + Core ML and only ships in the macOS bundle. */}
+          {isMacOS && (
+            <label
+              className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors has-data-[state=checked]:border-primary/50 has-data-[state=checked]:bg-primary/5 has-data-[state=checked]:ring-1 has-data-[state=checked]:ring-primary/20 ${
+                sttProvider !== "bark" ? "hover:border-muted-foreground/25" : ""
+              }`}
+            >
+              <RadioGroupItem value="bark" className="mt-0.5" />
+              <div className="flex flex-col gap-1">
+                <span className="text-xs font-medium text-foreground">
+                  Local (Bark)
+                </span>
+                <p className="text-[0.625rem] leading-relaxed text-muted-foreground">
+                  English only. Runs on the Apple Neural Engine. Requires macOS
+                  15 or later. First start can take a few minutes while the
+                  model compiles.
+                </p>
+              </div>
+            </label>
+          )}
         </RadioGroup>
       </div>
 
@@ -359,6 +383,9 @@ function SpeechSection() {
 
       {/* Fork: Whisper model picker + in-app downloader */}
       {sttProvider === "whisper" && <WhisperModelSection />}
+
+      {/* Fork: Bark model status + in-app downloader */}
+      {sttProvider === "bark" && isMacOS && <BarkModelSection />}
     </div>
   )
 }
@@ -619,8 +646,8 @@ function ApiKeysSection() {
           )}
         </div>
         <p className="text-[0.625rem] text-muted-foreground">
-          {sttProvider === "whisper"
-            ? "Not required when using local Whisper. "
+          {sttProvider !== "deepgram"
+            ? "Not required when using a local provider. "
             : "Required for cloud transcription. "}
           Configure in the Speech Recognition section.
         </p>

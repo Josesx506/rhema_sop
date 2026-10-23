@@ -58,6 +58,28 @@ describe("use-transcription", () => {
       })
     })
 
+    it("invokes start_transcription with provider bark and no API key", async () => {
+      mockInvoke.mockResolvedValue(undefined)
+      const { useSettingsStore, transcriptionActions } = await loadModules()
+
+      useSettingsStore.setState({
+        sttProvider: "bark",
+        deepgramApiKey: "ignored-for-bark",
+        audioDeviceId: "dev-7",
+        gain: 2.0,
+      })
+
+      await transcriptionActions.start()
+
+      expect(mockInvoke).toHaveBeenCalledWith("start_transcription", {
+        apiKey: "", // bark is local; the key is never forwarded
+        deviceId: "dev-7",
+        gain: 2.0,
+        provider: "bark",
+        whisperModel: "ggml-large-v3-turbo-q8_0.bin",
+      })
+    })
+
     it("forwards the Deepgram key when provider is deepgram", async () => {
       mockInvoke.mockResolvedValue(undefined)
       const { useSettingsStore, transcriptionActions } = await loadModules()

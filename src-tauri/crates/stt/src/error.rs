@@ -20,4 +20,7 @@ pub enum SttError {
 
     #[error("model not found: {0}")]
     ModelNotFound(String),
+
+    #[error("sidecar failed: {0}")]
+    SidecarFailed(String),
 }

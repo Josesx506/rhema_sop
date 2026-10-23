@@ -9,6 +9,15 @@ vi.mock("@tauri-apps/plugin-store", () => ({
   load: (...args: unknown[]) => mockLoad(...args),
 }))
 
+// Fork: Bark is only offered on macOS, and vitest runs under Node where the
+// real detection says "not a Mac".
+const platform = vi.hoisted(() => ({ isMacOS: true }))
+vi.mock("@/lib/platform", () => ({
+  get isMacOS() {
+    return platform.isMacOS
+  },
+}))
+
 async function flushSave(): Promise<void> {
   // Advance past the debounce window, then let the chained
   // pendingSave promise resolve.
@@ -29,6 +38,7 @@ describe("settings store", () => {
       set: mockSet,
       save: mockSave,
     })
+    platform.isMacOS = true
     vi.resetModules()
   })
 
@@ -50,6 +60,49 @@ describe("settings store", () => {
     // Defaults remain for keys with null
     expect(state.autoMode).toBe(false)
     expect(state.confidenceThreshold).toBe(0.8)
+  })
+
+  it("hydrate falls back to deepgram for an unknown persisted sttProvider", async () => {
+    mockGet.mockImplementation(async (key: string) => {
+      if (key === "sttProvider") return "parakeet"
+      if (key === "gain") return 1.75
+      return null
+    })
+
+    const { hydrateSettings, useSettingsStore } = await import("./settings-store")
+    await hydrateSettings()
+
+    const state = useSettingsStore.getState()
+    expect(state.sttProvider).toBe("deepgram")
+    // Other keys still hydrate normally
+    expect(state.gain).toBe(1.75)
+  })
+
+  it("hydrate accepts bark as a persisted sttProvider on macOS", async () => {
+    mockGet.mockImplementation(async (key: string) =>
+      key === "sttProvider" ? "bark" : null
+    )
+
+    const { hydrateSettings, useSettingsStore } = await import("./settings-store")
+    await hydrateSettings()
+
+    expect(useSettingsStore.getState().sttProvider).toBe("bark")
+  })
+
+  it("hydrate falls back to deepgram for a persisted bark off macOS", async () => {
+    platform.isMacOS = false
+    mockGet.mockImplementation(async (key: string) => {
+      if (key === "sttProvider") return "bark"
+      if (key === "gain") return 1.25
+      return null
+    })
+
+    const { hydrateSettings, useSettingsStore } = await import("./settings-store")
+    await hydrateSettings()
+
+    const state = useSettingsStore.getState()
+    expect(state.sttProvider).toBe("deepgram")
+    expect(state.gain).toBe(1.25)
   })
 
   it("hydrate with no persisted values falls back to defaults", async () => {

@@ -6,6 +6,19 @@ Fork releases of Rhema (rhema_sop). Dates are release dates.
 
 ### Added
 
+- **Local Bark STT on macOS.** A third speech-to-text provider, "Local
+  (Bark)", runs Underdog Bark 3.0 (a 0.6B English model fine-tuned from
+  NVIDIA Parakeet TDT v3) on the Apple Neural Engine through a FluidAudio
+  Swift sidecar. It needs macOS 15 or later and is hidden on other platforms;
+  Deepgram and Whisper are unchanged. The Core ML model (about 437 MB) can
+  be downloaded from Settings → Speech Recognition, with progress, cancel
+  and remove, or into the dev tree with `bun run download:bark`. The sidecar
+  (`bun run build:bark-sidecar`) also has a one-shot mode for benchmarking a
+  WAV file, and takes any Parakeet-layout model folder so other models can
+  be compared on the same recording. A persisted provider the build does
+  not know now falls back to Deepgram instead of leaving the store holding
+  a value the backend cannot start.
+
 - **The song catalog is sorted alphabetically**, with a sort button in the
   panel header to flip between A–Z and newest-first. Imports used to land at
   the bottom in insertion order, which stops being findable at a few hundred

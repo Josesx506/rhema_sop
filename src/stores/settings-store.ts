@@ -1,7 +1,21 @@
 import { create } from "zustand"
 import { load, type Store } from "@tauri-apps/plugin-store"
+import { isMacOS } from "@/lib/platform"
 
-type SttProvider = "deepgram" | "whisper"
+/** Fork: "bark" is the local Underdog Bark 3.0 provider (macOS 15+ only). */
+export const STT_PROVIDERS = ["deepgram", "whisper", "bark"] as const
+export type SttProvider = (typeof STT_PROVIDERS)[number]
+
+function isSttProvider(value: unknown): value is SttProvider {
+  return (STT_PROVIDERS as readonly unknown[]).includes(value)
+}
+
+/** A provider this build can actually start: Bark is macOS only and its
+ * radio is hidden elsewhere, so a settings file copied from a Mac must not
+ * leave Windows or Linux with no selectable provider. */
+function isAvailableSttProvider(value: unknown): value is SttProvider {
+  return isSttProvider(value) && (value !== "bark" || isMacOS)
+}
 
 /** Fork: what a monitor or projector shows when faded out (idle fade or
  * operator blank) — full black, or the active theme's background + logo. */
@@ -135,6 +149,14 @@ export function hydrateSettings(): Promise<void> {
       for (const key of PERSISTED_KEYS) {
         const value = await store.get(key)
         if (value !== undefined && value !== null) {
+          // Fork: a provider persisted by a build that knew a value this one
+          // does not (or a hand-edited settings file) must not leave the
+          // store holding a provider the backend cannot start.
+          if (key === "sttProvider" && !isAvailableSttProvider(value)) {
+            console.warn(`[settings] Unavailable sttProvider ${String(value)}, using deepgram`)
+            patch.sttProvider = "deepgram"
+            continue
+          }
           ;(patch as Record<string, unknown>)[key] = value
         }
       }

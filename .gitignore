@@ -65,3 +65,6 @@ bench-results/
 *.pfx
 # Local-only files (certs, ProPresenter exports) — never commit
 local/
+
+# Bark STT sidecar binary (built by scripts/build-bark-sidecar.sh)
+src-tauri/binaries/

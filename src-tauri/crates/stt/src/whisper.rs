@@ -7,7 +7,6 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
 
 use crossbeam_channel::Receiver;
 use tokio::sync::mpsc;
@@ -15,19 +14,8 @@ use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextPar
 
 use crate::error::SttError;
 use crate::provider::SttProvider;
+use crate::segmenter::{self, i16_to_f32};
 use crate::types::{TranscriptEvent, Word};
-
-/// Maximum audio buffer before force-flushing to inference (10 seconds at 16 kHz).
-const MAX_BUFFER_SAMPLES: usize = 16_000 * 10;
-
-/// Minimum audio buffer for inference (1.0 seconds).
-/// Whisper warns "input is too short" below 1s.
-const MIN_BUFFER_SAMPLES: usize = 16_000;
-
-/// Convert i16 PCM samples to f32 in [-1.0, 1.0] range.
-fn i16_to_f32(samples: &[i16]) -> Vec<f32> {
-    samples.iter().map(|&s| f32::from(s) / 32768.0).collect()
-}
 
 /// Extract transcript text, words, and average confidence from Whisper state.
 #[expect(clippy::cast_precision_loss, reason = "timestamps and word counts are small enough")]
@@ -112,7 +100,6 @@ impl std::fmt::Debug for WhisperProvider {
 
 #[async_trait::async_trait]
 impl SttProvider for WhisperProvider {
-    #[expect(clippy::too_many_lines, reason = "spawns two blocking tasks with setup; splitting would obscure the pipeline flow")]
     async fn start(
         &self,
         audio_rx: Receiver<Vec<i16>>,
@@ -135,89 +122,19 @@ impl SttProvider for WhisperProvider {
         let (inference_tx, mut inference_rx) = mpsc::channel::<Vec<i16>>(4);
 
         // ── Task 1: VAD + audio accumulation ─────────────────────────────
+        // The buffering and flush loop is shared with the Bark provider; the
+        // log target and prefix keep Whisper's log output unchanged.
         let vad_cancelled = cancelled.clone();
         let vad_event_tx = event_tx.clone();
         let vad_handle = tokio::task::spawn_blocking(move || {
-            use rhema_audio::{AudioFrame, Vad, VadConfig, VadTransition};
-
-            // Higher thresholds than default to avoid sending near-silence
-            // to Whisper (which causes hallucinations).
-            let vad_config = VadConfig {
-                silence_threshold: 0.01,
-                frame_threshold: 0.005,
-                min_voice_frames: 6,
-                ..VadConfig::default()
-            };
-            let mut vad = Vad::new(vad_config);
-            let mut audio_buffer: Vec<i16> = Vec::new();
-            let mut frames_seen: u64 = 0;
-
-            loop {
-                if vad_cancelled.load(Ordering::SeqCst) {
-                    if audio_buffer.len() >= MIN_BUFFER_SAMPLES {
-                        let _ = inference_tx.blocking_send(std::mem::take(&mut audio_buffer));
-                    }
-                    break;
-                }
-
-                match audio_rx.recv_timeout(Duration::from_millis(50)) {
-                    Ok(samples) => {
-                        let frame = AudioFrame { samples, timestamp_ms: 0 };
-                        let result = vad.process(&frame);
-
-                        if let Some(transition) = result.transition {
-                            match transition {
-                                VadTransition::SpeechStarted => {
-                                    let _ = vad_event_tx
-                                        .blocking_send(TranscriptEvent::SpeechStarted);
-                                }
-                                VadTransition::SpeechEnded => {
-                                    log::info!(
-                                        "[WHISPER] flush on SpeechEnded: audio_buffer={} samples ({:.1}s)",
-                                        audio_buffer.len(),
-                                        audio_buffer.len() as f64 / 16_000.0,
-                                    );
-                                    if audio_buffer.len() >= MIN_BUFFER_SAMPLES {
-                                        let _ = inference_tx
-                                            .blocking_send(std::mem::take(&mut audio_buffer));
-                                    } else {
-                                        audio_buffer.clear();
-                                    }
-                                }
-                            }
-                        }
-
-                        for frame in result.frames {
-                            audio_buffer.extend_from_slice(&frame.samples);
-                            frames_seen += 1;
-                        }
-
-                        if frames_seen.is_multiple_of(50) && !audio_buffer.is_empty() {
-                            log::debug!(
-                                "[WHISPER] audio_buffer={} samples ({:.1}s) frames_seen={frames_seen}",
-                                audio_buffer.len(),
-                                audio_buffer.len() as f64 / 16_000.0,
-                            );
-                        }
-
-                        if audio_buffer.len() >= MAX_BUFFER_SAMPLES {
-                            log::warn!(
-                                "[WHISPER] flush on MAX_BUFFER ({} samples / {:.1}s) — VAD never closed",
-                                audio_buffer.len(),
-                                audio_buffer.len() as f64 / 16_000.0,
-                            );
-                            let _ = inference_tx.blocking_send(std::mem::take(&mut audio_buffer));
-                        }
-                    }
-                    Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
-                    Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
-                        if audio_buffer.len() >= MIN_BUFFER_SAMPLES {
-                            let _ = inference_tx.blocking_send(std::mem::take(&mut audio_buffer));
-                        }
-                        break;
-                    }
-                }
-            }
+            segmenter::run_segmenter(
+                module_path!(),
+                "[WHISPER]",
+                &audio_rx,
+                &vad_cancelled,
+                &vad_event_tx,
+                &inference_tx,
+            );
         });
 
         // ── Task 2: Whisper inference ────────────────────────────────────

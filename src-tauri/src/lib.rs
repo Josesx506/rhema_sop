@@ -122,6 +122,14 @@ pub fn run() {
             commands::whisper_model::download_whisper_model,
             commands::whisper_model::cancel_whisper_download,
             commands::whisper_model::delete_whisper_model,
+            #[cfg(all(feature = "bark", target_os = "macos"))]
+            commands::bark_model::bark_model_status,
+            #[cfg(all(feature = "bark", target_os = "macos"))]
+            commands::bark_model::download_bark_model,
+            #[cfg(all(feature = "bark", target_os = "macos"))]
+            commands::bark_model::cancel_bark_download,
+            #[cfg(all(feature = "bark", target_os = "macos"))]
+            commands::bark_model::delete_bark_model,
             commands::broadcast::list_monitors,
             commands::broadcast::ensure_broadcast_window,
             commands::broadcast::open_broadcast_window,

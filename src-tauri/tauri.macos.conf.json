@@ -4,6 +4,9 @@
     "resources": {
       "../data/rhema.db": "rhema.db",
       "../sdk/ndi/macos/libndi.dylib": "sdk/ndi/macos/libndi.dylib"
-    }
+    },
+    "externalBin": [
+      "binaries/bark-sidecar"
+    ]
   }
 }

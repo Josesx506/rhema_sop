@@ -103,6 +103,15 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Rhema version: $VERSION"
 
+      # The macOS bundle ships the Bark STT sidecar as a Tauri externalBin.
+      # Without this step src-tauri/build.rs would stand in a placeholder at
+      # src-tauri/binaries/bark-sidecar-aarch64-apple-darwin and the release
+      # would bundle that instead of the real sidecar. The runner's Xcode has
+      # the Swift 6 toolchain FluidAudio needs.
+      - name: Build Bark sidecar
+        if: runner.os == 'macOS'
+        run: bun run build:bark-sidecar
+
       - name: Pre-build Rust (workaround for whisper-rs-sys env issue)
         run: cargo build --release --target ${{ matrix.target }}
         working-directory: src-tauri
