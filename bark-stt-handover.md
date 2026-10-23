@@ -4,19 +4,13 @@ Last updated: 2026-10-23. Branch: `feat/bark-stt`, commit `023b528` on top of `m
 
 ## Status in one paragraph
 
-The Bark provider is fully implemented and committed: Swift sidecar, Rust provider, Tauri wiring, in-app model downloader, frontend option, docs, CI step. Every check that can run on this Mac passes. The sidecar has never been compiled or executed, because this Mac is macOS 14.0 with Swift 5.10 and the Bark Core ML model needs macOS 15 and FluidAudio needs Swift 6. Done-when items 3 to 6 of the spec are open.
+The Bark provider is implemented, committed, and now proven on this Mac: the sidecar builds with Swift 6.1.2 (Command Line Tools 16.4 on macOS 15.8.1), the model is downloaded, one-shot and server modes both work, and the Rust provider ran end to end against the real sidecar through the shared segmenter. Spec done-when items 1 to 4 are complete. Items 5 (live mic test in the app) and 6 (production bundle and codesign check) are still open. The headline result is negative for Bark as shipped: it is 6 to 8 times faster than Whisper per segment but its number formatting defeats the verse detector. See "Benchmark results" below.
 
-## Decision pending: how to get a build environment
+## Environment (resolved 2026-10-23)
 
-The dev Mac also hosts research toolchains (CPS, hole tomography, specfwat and similar Fortran/MPI/Homebrew stacks), so a jump to macOS 27 is risky. Options, lowest risk first:
+macOS 15.8.1, Command Line Tools for Xcode 16.4 (Swift 6.1.2, SDK 15.5), Xcode 15.3 still in Applications but unused. Research toolchains were not touched beyond the CLT update. Model at `models/bark/bark-3.0` (21 files, 421 MB). Sidecar at `src-tauri/binaries/bark-sidecar-aarch64-apple-darwin` (gitignored, rebuild with `bun run build:bark-sidecar`).
 
-1. Stay on macOS 14, apply the 14.x point update (14.5 or later), install Xcode 16 from the App Store, `xcode-select -s /Applications/Xcode.app`. Gives Swift 6, so the sidecar builds and Parakeet Ultra (macOS 14 compatible) can be benchmarked. Bark itself still needs macOS 15.
-2. Add an APFS volume in Disk Utility, install macOS 15 or 27 on it, boot into it only for Rhema. Main volume untouched.
-3. Upgrade the main volume to macOS 15 (not 27). Rebuild Homebrew formulae, gfortran, MPI afterwards. Time Machine first.
-
-Suggested: option 1 now, option 2 when ready to run Bark itself.
-
-## Commands once Swift 6 is available
+## Commands (all verified working)
 
 ```
 bun run build:bark-sidecar
@@ -77,3 +71,33 @@ Bark 3.0 vs Parakeet Ultra vs Whisper large-v3-turbo on two recorded sermons. Me
 ## Upstream (openbezal/rhema) as of 2026-10-23
 
 One commit ahead of the fork point (`0b0982c`, drops a flag in the model export scripts). Merges cleanly, no conflicts. No upstream work on alternative STT providers. Open upstream PRs #174 (update checker) and #183 (dual-language broadcast) would conflict mechanically with the fork's command registration and settings UI if merged later.
+
+## Benchmark results (2026-10-23, macOS text-to-speech samples)
+
+Two synthetic WAVs made with `say` (Samantha and Daniel voices), 16 kHz mono, 10 s and 18 s, containing 11 spoken references. Both providers ran through the identical VAD segmenter in a temporary rhema-stt integration test, then each Final transcript went through `DirectDetector::detect`. Scratch files: `/private/tmp/claude-501/-Users-ppersaud-Projects-rhema-sop/d7df61a6-99e9-4263-8ac5-d08e50597ac2/scratchpad/verses.wav` and `refs2.wav` (session temp, regenerate with `say` if gone).
+
+| | Whisper large-v3-turbo q8 | Bark 3.0 (FluidAudio, ANE) |
+|---|---|---|
+| Model load | about 8 s | 71 s cold (ANE compile, once), 0.2 s warm |
+| Inference, 10 s segment | 1.0 s | 0.15 s |
+| Inference, 5 s segment | 0.53 s | 0.065 s |
+| Correct detections out of 11 | 6 | 2 |
+| False detections | 2 (Romans 1:1, Psalms 1:1 from "Romans 8 28" and "Psalm 23") | 0 |
+
+How each model writes references:
+
+- Whisper: "John 3.16", "1 Thessalonians 4.13", "2 Timothy 3.16", "Revelation 21.4", "Romans 8 28", "Genesis chapter 1 verse 1", "Matthew 5 verse 3", "Philemon 1-6". Dropped "Habakkuk" entirely.
+- Bark: "John316", "Thessalonians4 13", "Romans828", "Psalm23", "Genesis chapter1, verse1", "Matthew5,3,", "second timothy316", "revelation214". Spoken "chapter three verse sixteen" stays as words and is detected. Wrote "habit" for Habakkuk and "the lemon" for Philemon (TTS pronunciation may share blame; Whisper got Philemon right). Short low-confidence segments come out lowercase without punctuation.
+
+Confirmed by dumping word tokens from server mode: the glued forms are single tokens from the model itself. FluidAudio's inverse text normalization is not in the TDT decode path, and `--leading-silence 0.25` changes nothing.
+
+Detector behaviour on Bark forms (probed directly): "John 3 16" and "Second Timothy 3:16" and "Matthew 5,3" are detected once a space separates book and digits; "John 316", "Romans 828", "Psalm 23", "Genesis chapter 1.1" are not. "Psalm 23" failing is pre-existing detector behaviour, not Bark related.
+
+### What would make Bark usable
+
+1. Detector change (the real fix, deliberately not done on this branch per the spec): when a book name is immediately followed by a digit run with no separator, or followed by a single digit run with a space, split the run using versification: try (chapter, verse) splits and keep those where the chapter exists and the verse is within range; prefer the split with the shorter chapter when both are valid. "316" in John is 3:16 only (John has 21 chapters); "828" in Romans is 8:28 only; "413" in 1 Thessalonians is 4:13 only; "214" in Revelation is ambiguous (2:14 and 21:4 both valid); "23" in Psalms is ambiguous (chapter 23 or 2:3); "16" in Philemon is 1:6 only (one chapter). This recovers most cases and would also fix Whisper's "Romans 8 28" false detection.
+2. Provider-side normalization (cheap, inside `bark.rs` or the sidecar): insert a space at every letter-to-digit boundary inside a token. On its own this recovers only the punctuated forms ("Timothy3:16", "Matthew5,3"), so it is a complement to item 1, not a substitute.
+3. Proper nouns: Bark missed Habakkuk and Philemon on synthetic speech. FluidAudio's custom-vocabulary boosting is documented for v2/v3 models, not ultra/Bark; worth testing with the 66 book names if item 1 lands.
+4. Parakeet Ultra is untested here; download `FluidInference/parakeet-ultra-coreml` and rerun the same comparison. Its number formatting is probably the same family behaviour, so item 1 is needed regardless.
+
+Verdict for now: keep Whisper as the default local provider. Bark is worth revisiting only after the detector learns to split glued chapter and verse digits; at that point its speed and lower hallucination risk make it attractive.
