@@ -101,3 +101,38 @@ Detector behaviour on Bark forms (probed directly): "John 3 16" and "Second Timo
 4. Parakeet Ultra is untested here; download `FluidInference/parakeet-ultra-coreml` and rerun the same comparison. Its number formatting is probably the same family behaviour, so item 1 is needed regardless.
 
 Verdict for now: keep Whisper as the default local provider. Bark is worth revisiting only after the detector learns to split glued chapter and verse digits; at that point its speed and lower hallucination risk make it attractive.
+
+## Bark 3.0 Pro (checked 2026-10-23, not run)
+
+Conway also publishes `ConwayResearch/Underdog-Bark-3.0-Pro`. Same 0.6B Parakeet TDT architecture and the same vocabulary as the base model; self-reported average WER 4.29 percent against 4.94 percent for Bark 3.0 (level with Parakeet v3, not ahead of it; no independent measurement yet).
+
+| | Bark 3.0 (on disk now) | Bark 3.0 Pro |
+|---|---|---|
+| Core ML download | 421 MB | 1.23 GB |
+| Encoder weights | 395 MB int8 (FluidInference build) | 1.2 GB FP16 (Conway build) |
+| Packaging | `.mlmodelc` compiled | `.mlpackage` uncompiled, vocab named `parakeet_v3_vocab.json` |
+| Encoder | single function | multi-function: `short8` (up to 8 s) and `full15` |
+
+Why it is not a drop-in for the sidecar:
+
+- `AsrModels.loadLocal` only accepts compiled `.mlmodelc` folders plus `parakeet_vocab.json`. Pro needs a loader branch that compiles the packages once with `MLModel.compileModel(at:)`, caches the output, reads the differently named vocab, and picks the encoder function per segment (our segments run 1 to 10 s, so `full15` for anything over 8 s).
+- FluidAudio 0.17.7 already has the public `AsrModels(encoder:preprocessor:decoder:joint:configuration:vocabulary:version:)` initializer Conway's runner uses with `version: .ultra`, so no dependency bump. Conway's own demo package wants Swift 6.2 but that is their package, not ours.
+- The in-app downloader points at the FluidInference repo. For a benchmark, download `coreml/*` and `NOTICE` by hand into `models/bark/bark-3.0-pro`.
+
+Expectation: Pro probably still glues digits, since that comes from the training text and the shared vocabulary. A better fine-tune is more likely to help proper nouns (Habakkuk, Philemon). Running the comparison is about an hour: loader branch, 1.2 GB download, the same two clips, the same detector probe.
+
+## Other uses for Bark (ideas, none started)
+
+Bark gives three things the other providers do not at the same time: free local inference, 6 to 8 times Whisper's speed, and word timings with per-word confidence. Caveat for all of these: FluidAudio is macOS and iOS only, so they run on a Mac at the desk. The church Windows PC stays on Deepgram unless the model is ported through ONNX, which Conway has not published.
+
+Ranked by fit with the existing code:
+
+1. **Live captions on the broadcast output.** New consumer of the existing transcript stream feeding the NDI and lower-third layers. Word timings allow word-by-word captions in step with the speaker. Whisper is too slow for this and Deepgram costs per minute. Least new code of the list.
+2. **Song following.** Transcribe sung worship and match it against the active setlist's blocks to suggest (not auto-present at first) the block being sung. The glued-digit failure is irrelevant for lyrics, speed and confidence weighting help, and the closed candidate set tolerates high word error rates. Unknown: neither model is trained on singing, so this needs one or two real worship recordings from the desk mix plus their catalog entries before any commitment. First step is an offline harness: WAV plus catalog JSON in, WER against the lyrics and simulated block-match accuracy out, for both Bark and Whisper.
+3. **Bark as a fast first pass in front of Whisper.** Bark reads every segment in 0.15 s; only segments containing a book name go to Whisper for accurate numbers. Cuts Whisper load to a fraction and removes the transcript backlog on slow machines. Variant: Bark shows a provisional detection at once, Whisper confirms or corrects a second later.
+4. **Sermon archive and search.** Batch-transcribe recorded services at well over 60 times real time, store timestamped text in the notes crate, index it with the embedding model semantic detection already uses. Search past sermons by topic or verse and jump to the moment.
+5. **Service structure markers.** FluidAudio also ships VAD and speaker diarization; the sidecar could expose both. Gives worship/announcement/preaching boundaries and preacher versus guest reader separation for the archive and for mode switching.
+6. **Operator voice commands.** A short grammar over the live transcript ("next slide", "show the verse") driving the api crate's remote command surface. FluidAudio's beta custom-vocabulary CTC head would make the phrases reliable. Needs a confirmation step or push-to-talk so a sermon never triggers it.
+7. **Mic and pacing diagnostics.** Average word confidence per minute as a bad-mic or dropout signal; words per minute and speaking time as sermon statistics for the notes panel.
+
+Recommendation: items 1 and 3 give the most benefit for the least new code and reuse the provider as it is on the branch. Item 2 has the highest upside but is the only one that needs new audio to validate first.
