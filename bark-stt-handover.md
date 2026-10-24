@@ -4,6 +4,8 @@ Last updated: 2026-10-23. Branch: `feat/bark-stt`, commit `023b528` on top of `m
 
 ## Status in one paragraph
 
+**Parked 2026-10-24.** Live test confirmed the benchmark: Bark detects fewer verses than Whisper. Branch kept on the remote for reference, not merged into `main`.
+
 The Bark provider is implemented, committed, and now proven on this Mac: the sidecar builds with Swift 6.1.2 (Command Line Tools 16.4 on macOS 15.8.1), the model is downloaded, one-shot and server modes both work, and the Rust provider ran end to end against the real sidecar through the shared segmenter. Spec done-when items 1 to 4 are complete. Items 5 (live mic test in the app) and 6 (production bundle and codesign check) are still open. The headline result is negative for Bark as shipped: it is 6 to 8 times faster than Whisper per segment but its number formatting defeats the verse detector. See "Benchmark results" below.
 
 ## Environment (resolved 2026-10-23)
@@ -94,6 +96,10 @@ How each model writes references:
 Confirmed by dumping word tokens from server mode: the glued forms are single tokens from the model itself. FluidAudio's inverse text normalization is not in the TDT decode path, and `--leading-silence 0.25` changes nothing.
 
 Detector behaviour on Bark forms (probed directly): "John 3 16" and "Second Timothy 3:16" and "Matthew 5,3" are detected once a space separates book and digits; "John 316", "Romans 828", "Psalm 23", "Genesis chapter 1.1" are not. "Psalm 23" failing is pre-existing detector behaviour, not Bark related.
+
+### Live test in the app (2026-10-24)
+
+The user ran the live mic test in `bun run tauri dev` with "Local (Bark)" selected and reported that Bark was not as performant as Whisper for verse detection, which matches the synthetic benchmark above. Decision: the feature stays on this branch (`feat/bark-stt` on the fork remote) and is not merged. `main` keeps Deepgram and Whisper only. Resume from this document if the detector-side digit split or one of the other uses below is picked up later.
 
 ### What would make Bark usable
 
