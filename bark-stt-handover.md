@@ -10,6 +10,8 @@ The Bark provider is implemented, committed, and now proven on this Mac: the sid
 
 macOS 15.8.1, Command Line Tools for Xcode 16.4 (Swift 6.1.2, SDK 15.5), Xcode 15.3 still in Applications but unused. Research toolchains were not touched beyond the CLT update. Model at `models/bark/bark-3.0` (21 files, 421 MB). Sidecar at `src-tauri/binaries/bark-sidecar-aarch64-apple-darwin` (gitignored, rebuild with `bun run build:bark-sidecar`).
 
+After the Command Line Tools upgrade (15 to 16.4) the first `bun run tauri dev` failed at link time with `ld: library 'clang_rt.osx' not found`, because the build scripts of `ort-sys` and `whisper-rs-sys` had cached the old `clang/15.0.0` search path in `target/debug/build/*/output`. Fix (2026-10-24): `cd src-tauri && cargo clean -p ort-sys -p whisper-rs-sys`, then build again. Expect the same after any future Xcode or CLT upgrade. A "Port 3000 is already in use" error from Vite means a previous dev run is still alive; `pkill -f vite` clears it.
+
 ## Commands (all verified working)
 
 ```
