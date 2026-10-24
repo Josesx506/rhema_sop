@@ -26,6 +26,7 @@ import {
   ArrowDownAZIcon,
   ClockIcon,
   DownloadIcon,
+  EllipsisVerticalIcon,
   ListPlusIcon,
   PencilIcon,
   PlusIcon,
@@ -134,6 +135,11 @@ export function SongCatalogPanel() {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
   const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  // Wiping a catalog of a few hundred songs gets a real dialog rather than
+  // the click-twice confirm used for one row: there is no undo, and the
+  // dialog is also where the operator is pointed at Export for a backup.
+  const [deleteAllOpen, setDeleteAllOpen] = useState(false)
+
   useEffect(() => {
     void hydrateSongCatalog()
   }, [])
@@ -232,6 +238,16 @@ export function SongCatalogPanel() {
     })()
   }
 
+  const handleDeleteAll = () => {
+    const removed = useSongStore.getState().deleteAllSongs()
+    setDeleteAllOpen(false)
+    if (confirmTimer.current) clearTimeout(confirmTimer.current)
+    setConfirmDeleteId(null)
+    toast.success(`Deleted ${removed} song${removed === 1 ? "" : "s"}`, {
+      description: "The current setlist still has its songs until you clear it.",
+    })
+  }
+
   const handleDeleteClick = (id: string) => {
     if (confirmDeleteId === id) {
       if (confirmTimer.current) clearTimeout(confirmTimer.current)
@@ -296,6 +312,22 @@ export function SongCatalogPanel() {
             <DownloadIcon className="size-3" />
             Export
           </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon-xs" title="Catalog">
+                <EllipsisVerticalIcon className="size-3.5" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-40">
+              <DropdownMenuItem
+                variant="destructive"
+                disabled={songs.length === 0}
+                onClick={() => setDeleteAllOpen(true)}
+              >
+                Delete all songs…
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </PanelHeader>
 
@@ -336,6 +368,32 @@ export function SongCatalogPanel() {
       </ScrollArea>
 
       <SongEditorDialog open={editorOpen} onOpenChange={setEditorOpen} song={editingSong} initial={editorInitial} />
+
+      <Dialog open={deleteAllOpen} onOpenChange={setDeleteAllOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Delete all songs?</DialogTitle>
+            <DialogDescription>
+              This removes all {songs.length} song{songs.length === 1 ? "" : "s"} from the catalog and cannot be
+              undone. Songs already in the setlist stay there until you clear it. Export the catalog first if you
+              want a backup.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteAllOpen(false)}>
+              Cancel
+            </Button>
+            <Button variant="outline" onClick={handleExport}>
+              <DownloadIcon className="size-3.5" />
+              Export first
+            </Button>
+            <Button variant="destructive" onClick={handleDeleteAll}>
+              <Trash2Icon className="size-3.5" />
+              Delete {songs.length} song{songs.length === 1 ? "" : "s"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={pasteOpen} onOpenChange={setPasteOpen}>
         <DialogContent className="sm:max-w-lg">

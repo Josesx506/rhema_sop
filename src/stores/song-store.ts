@@ -32,6 +32,11 @@ interface SongState {
   addSong: (input: Omit<Song, "id" | "createdAt" | "updatedAt">) => Song
   updateSong: (id: string, patch: Partial<Omit<Song, "id">>) => void
   deleteSong: (id: string) => void
+  /** Empty the whole catalog in one step. Returns how many songs were
+   * removed. The setlist is left alone: its entries carry their own title
+   * and blocks, so a service already built keeps working, the same as
+   * deleting songs one at a time. */
+  deleteAllSongs: () => number
   /** Bulk-merge already-fully-formed songs (e.g. from a catalog JSON import).
    * Appends, never overwrites; songs already in the catalog (by title +
    * artist, see songIdentityKey) and repeats within the batch are dropped.
@@ -147,6 +152,11 @@ export const useSongStore = create<SongState>((set, get) => ({
       songs: s.songs.map((song) => (song.id === id ? { ...song, ...patch, id, updatedAt: Date.now() } : song)),
     })),
   deleteSong: (id) => set((s) => ({ songs: s.songs.filter((song) => song.id !== id) })),
+  deleteAllSongs: () => {
+    const count = get().songs.length
+    if (count > 0) set({ songs: [] })
+    return count
+  },
   importSongs: (songs) => {
     let summary = { added: 0, duplicates: 0 }
     set((s) => {
@@ -347,15 +357,17 @@ async function getSongStore(): Promise<Store> {
 }
 
 /** Loads the persisted catalog into the store, seeding it with the sample
- * song on first run (empty/missing catalog). Idempotent and safe against
- * concurrent callers. */
+ * song on first run (no catalog saved yet). A saved but empty catalog is
+ * respected: after "Delete all songs" the operator expects an empty list
+ * at the next launch, not Amazing Grace back again. Idempotent and safe
+ * against concurrent callers. */
 export function hydrateSongCatalog(): Promise<void> {
   if (hydrationPromise) return hydrationPromise
   hydrationPromise = (async () => {
     try {
       const store = await getSongStore()
       const songs = (await store.get("songs")) as Song[] | undefined
-      useSongStore.setState({ songs: songs && Array.isArray(songs) && songs.length > 0 ? songs : [SAMPLE_SONG] })
+      useSongStore.setState({ songs: Array.isArray(songs) ? songs : [SAMPLE_SONG] })
 
       // Auto-persist on catalog changes (debounced). The setlist is
       // session-only and intentionally excluded.

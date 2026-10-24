@@ -156,6 +156,42 @@ describe("song store catalog CRUD", () => {
     expect(useSongStore.getState().songs).toHaveLength(0)
   })
 
+  it("deleteAllSongs empties the catalog and reports how many songs went", async () => {
+    const { useSongStore } = await import("./song-store")
+    useSongStore.getState().addSong({ title: "A", artist: "", sections: [], arrangement: [] })
+    useSongStore.getState().addSong({ title: "B", artist: "", sections: [], arrangement: [] })
+
+    expect(useSongStore.getState().deleteAllSongs()).toBe(2)
+    expect(useSongStore.getState().songs).toEqual([])
+  })
+
+  it("deleteAllSongs on an empty catalog returns 0 and keeps the array reference", async () => {
+    const { useSongStore } = await import("./song-store")
+    const before = useSongStore.getState().songs
+
+    expect(useSongStore.getState().deleteAllSongs()).toBe(0)
+    expect(useSongStore.getState().songs).toBe(before)
+  })
+
+  it("deleteAllSongs leaves the setlist and its live block untouched", async () => {
+    const { useSongStore } = await import("./song-store")
+    const song = useSongStore.getState().addSong({
+      title: "Kept",
+      artist: "",
+      sections: [makeSection()],
+      arrangement: [],
+    })
+    useSongStore.getState().addSongToSetlist(song.id)
+    const entry = useSongStore.getState().setlist[0]
+    useSongStore.getState().presentBlock(entry.id, entry.blocks[0].id)
+
+    useSongStore.getState().deleteAllSongs()
+
+    expect(useSongStore.getState().songs).toEqual([])
+    expect(useSongStore.getState().setlist).toHaveLength(1)
+    expect(useSongStore.getState().activeBlockId).toBe(entry.blocks[0].id)
+  })
+
   it("setSearchQuery / matchesSearch filters by title, artist, and lyric text case-insensitively", async () => {
     const { useSongStore, matchesSearch } = await import("./song-store")
     useSongStore.getState().setSearchQuery("grace")
@@ -786,7 +822,7 @@ describe("song store catalog hydration", () => {
     setLiveVerseMock.mockReset()
   })
 
-  it("seeds the catalog with SAMPLE_SONG when the persisted catalog is empty", async () => {
+  it("seeds the catalog with SAMPLE_SONG when nothing has been saved yet", async () => {
     mockGet.mockResolvedValue(undefined)
 
     const { hydrateSongCatalog, useSongStore } = await import("./song-store")
@@ -794,6 +830,29 @@ describe("song store catalog hydration", () => {
 
     expect(useSongStore.getState().songs).toHaveLength(1)
     expect(useSongStore.getState().songs[0].title).toBe("Amazing Grace")
+  })
+
+  it("keeps a saved empty catalog empty instead of re-seeding the sample song", async () => {
+    mockGet.mockResolvedValue([])
+
+    const { hydrateSongCatalog, useSongStore } = await import("./song-store")
+    await hydrateSongCatalog()
+
+    expect(useSongStore.getState().songs).toEqual([])
+  })
+
+  it("persists an empty catalog after deleteAllSongs so the deletion survives a relaunch", async () => {
+    mockGet.mockResolvedValue([makeSong({ title: "Gone" })])
+
+    const { hydrateSongCatalog, useSongStore } = await import("./song-store")
+    await hydrateSongCatalog()
+    mockSet.mockClear()
+
+    useSongStore.getState().deleteAllSongs()
+    await flushSave()
+
+    expect(mockSet).toHaveBeenCalledWith("songs", [])
+    expect(mockSave).toHaveBeenCalled()
   })
 
   it("hydrate uses the persisted catalog when non-empty, without seeding the sample", async () => {

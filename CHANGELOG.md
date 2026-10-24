@@ -6,6 +6,12 @@ Fork releases of Rhema (rhema_sop). Dates are release dates.
 
 ### Added
 
+- **Delete all songs** from the catalog in one step, via the new overflow
+  menu in the Song catalog header. A confirmation dialog states how many
+  songs go, offers Export first for a backup, and notes that the current
+  setlist keeps its songs until it is cleared. An emptied catalog now stays
+  empty at the next launch; previously an empty saved catalog was treated
+  like a first run and the sample song came back.
 - **The song catalog is sorted alphabetically**, with a sort button in the
   panel header to flip between A–Z and newest-first. Imports used to land at
   the bottom in insertion order, which stops being findable at a few hundred
