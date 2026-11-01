@@ -139,6 +139,26 @@ pub fn run() {
             commands::remote::get_http_status,
             commands::remote::update_remote_status,
         ])
+        // Tauri only exits once every window is gone, and the broadcast
+        // projector windows (`broadcast-*`, hidden for NDI or fullscreen on a
+        // second monitor) are never closed by the UI when the main window
+        // goes away. Without this hook the app lingered with a dead projector
+        // on screen after closing the main window.
+        .on_window_event(|window, event| {
+            use tauri::{Manager, WindowEvent};
+            if window.label() != "main" || !matches!(event, WindowEvent::Destroyed) {
+                return;
+            }
+            for (label, other) in window.app_handle().webview_windows() {
+                if label == "main" {
+                    continue;
+                }
+                log::info!("main window destroyed; closing '{label}'");
+                if let Err(e) = other.close() {
+                    log::warn!("failed to close '{label}' on exit: {e}");
+                }
+            }
+        })
         .setup(|app| {
             use tauri::Manager;
 

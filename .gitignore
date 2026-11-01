@@ -65,3 +65,6 @@ bench-results/
 *.pfx
 # Local-only files (certs, ProPresenter exports) — never commit
 local/
+
+# Scratch lyric dumps for the song catalog
+songs.md
