@@ -98,6 +98,43 @@ impl BibleDb {
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
+    /// A chapter in every translation that shares `translation_id`'s
+    /// language, ordered by verse with `translation_id`'s row first in each
+    /// verse. Reading mode matches what the speaker reads against all of
+    /// them, since the reader's Bible is often not the one on screen.
+    pub fn get_chapter_parallel(
+        &self,
+        translation_id: i64,
+        book_number: i32,
+        chapter: i32,
+    ) -> Result<Vec<Verse>, BibleError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT v.id, v.translation_id, v.book_number, v.book_name, v.book_abbreviation, \
+                    v.chapter, v.verse, v.text \
+             FROM verses v JOIN translations t ON t.id = v.translation_id \
+             WHERE v.book_number = ?2 AND v.chapter = ?3 \
+               AND t.language = (SELECT language FROM translations WHERE id = ?1) \
+             ORDER BY v.verse, v.translation_id != ?1, v.translation_id",
+        )?;
+        let rows = stmt.query_map(
+            rusqlite::params![translation_id, book_number, chapter],
+            |row: &rusqlite::Row| {
+                Ok(Verse {
+                    id: row.get(0)?,
+                    translation_id: row.get(1)?,
+                    book_number: row.get(2)?,
+                    book_name: row.get(3)?,
+                    book_abbreviation: row.get(4)?,
+                    chapter: row.get(5)?,
+                    verse: row.get(6)?,
+                    text: row.get(7)?,
+                })
+            },
+        )?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
     pub fn get_verse_range(
         &self,
         translation_id: i64,

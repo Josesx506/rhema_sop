@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 use serde::Serialize;
@@ -9,17 +9,39 @@ use crate::direct::parser::parse_spoken_number;
 /// Context is maintained for ~3 minutes. Verses stay loaded for re-activation.
 const READING_MODE_TIMEOUT_MS: u128 = 180_000;
 
-/// Minimum word overlap ratio to consider a transcript matching a verse.
-const MIN_WORD_OVERLAP: f64 = 0.40;
+/// Minimum in-order score for an utterance to count as reading a verse —
+/// about two words that identify it (see `word_weights`).
+const MIN_MATCH_SCORE: f64 = 1.6;
+
+/// How far a later verse must outscore the current one to move to it.
+const ADVANCE_MARGIN: f64 = 0.3;
+
+/// Verses ahead of the current one considered for a move (1 = next only).
+const LOOKAHEAD_VERSES: usize = 3;
+
+/// Score discount per verse skipped, so the next verse wins ties.
+const SKIP_PENALTY: f64 = 0.25;
+
+/// Past the end of a spoken range ("verses 3 to 5") the reader has to be
+/// clearly reading on, not commenting, before the screen follows.
+const PAST_RANGE_FACTOR: f64 = 2.0;
+
+/// Extra evidence a partial transcript needs before the screen follows it,
+/// since its words can still change before the final.
+const INTERIM_FACTOR: f64 = 1.5;
+
+/// In-order score needed to jump to a verse outside the lookahead when the
+/// current verse doesn't match at all — several identifying words in a row.
+const RELOCATE_SCORE: f64 = 3.0;
 
 /// A verse loaded for reading mode tracking.
 #[derive(Debug, Clone)]
 struct LoadedVerse {
     verse_number: i32,
     text: String,
-    /// Pre-computed lowercase word set for fast matching.
-    words: HashSet<String>,
-    word_count: usize,
+    /// Content-word sequence of each loaded translation (display first),
+    /// in reading order, for in-order matching against the transcript.
+    texts: Vec<Vec<String>>,
 }
 
 /// Result when reading mode advances to a new verse.
@@ -44,6 +66,46 @@ pub struct ChapterChange {
     /// Optional verse number to start at (e.g., "chapter 3 verse 5" → verse 5)
     /// If None, starts at verse 1
     pub start_verse: Option<i32>,
+}
+
+/// One verse of a chapter as reading mode loads it: the text to display
+/// (active translation) plus the same verse in the other translations of
+/// that language, which the matcher also compares the transcript against.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChapterVerse {
+    pub verse: i32,
+    pub text: String,
+    pub alternates: Vec<String>,
+}
+
+impl ChapterVerse {
+    /// Group `BibleDb::get_chapter_parallel` rows into one entry per verse.
+    /// Verses missing from the display translation are dropped — presenting
+    /// another translation's text under the active one is worse than a gap.
+    pub fn from_parallel(rows: Vec<rhema_bible::Verse>, display_translation: i64) -> Vec<Self> {
+        let mut out: Vec<Self> = Vec::new();
+        let mut current: Option<i32> = None;
+        let mut display: Option<String> = None;
+        let mut alternates: Vec<String> = Vec::new();
+        // A trailing `None` flushes the last verse.
+        for row in rows.into_iter().map(Some).chain(std::iter::once(None)) {
+            let verse = row.as_ref().map(|r| r.verse);
+            if verse != current {
+                if let (Some(v), Some(text)) = (current, display.take()) {
+                    out.push(Self { verse: v, text, alternates: std::mem::take(&mut alternates) });
+                }
+                alternates.clear();
+                current = verse;
+            }
+            let Some(row) = row else { break };
+            if row.translation_id == display_translation {
+                display = Some(row.text);
+            } else {
+                alternates.push(row.text);
+            }
+        }
+        out
+    }
 }
 
 /// Context for interpreting bare numbers after "chapter" commands.
@@ -72,10 +134,21 @@ pub struct ReadingMode {
     current_index: usize,
     /// All verses from the starting verse to end of chapter.
     verses: Vec<LoadedVerse>,
+    /// Last verse of the spoken range ("verses 3 to 5"), if one was given.
+    /// Following past it takes much stronger evidence.
+    range_end: Option<i32>,
+    /// Per-word weight: words found in few verses of the chapter identify
+    /// a verse; words in most of them ("God" in Genesis 1) barely count.
+    weights: HashMap<String, f64>,
+    /// Content words of the previous utterance while it is unresolved — it
+    /// moved the screen or fit no verse clearly. Fragments are short, and
+    /// the one before often decides an ambiguous one ("I have written to
+    /// you fathers" + "because you have known Him…" is verse 14, not 13).
+    /// Cleared once an utterance plainly continues the current verse, so a
+    /// long stretch of it can't hold the screen through the next opening.
+    previous_words: Vec<String>,
     /// Last time a verse match was found.
     last_match_time: Instant,
-    /// Accumulated transcript text since last advance (for multi-fragment matching).
-    accumulated_text: String,
     /// Context for interpreting the next bare number
     bare_number_context: BareNumberContext,
 }
@@ -90,8 +163,10 @@ impl ReadingMode {
             chapter: 0,
             current_index: 0,
             verses: Vec::new(),
+            range_end: None,
+            weights: HashMap::new(),
+            previous_words: Vec::new(),
             last_match_time: Instant::now(),
-            accumulated_text: String::new(),
             bare_number_context: BareNumberContext::None,
         }
     }
@@ -108,18 +183,33 @@ impl ReadingMode {
         start_verse: i32,
         verses: Vec<(i32, String)>,
     ) {
+        let verses = verses
+            .into_iter()
+            .map(|(verse, text)| ChapterVerse { verse, text, alternates: Vec::new() })
+            .collect();
+        self.start_passage(book_number, book_name, chapter, start_verse, None, verses);
+    }
+
+    /// Activate reading mode on a whole chapter, positioned at `start_verse`.
+    ///
+    /// `range_end` is the last verse of a spoken range ("verses 3 to 5");
+    /// following continues past it only when the reader clearly carries on.
+    pub fn start_passage(
+        &mut self,
+        book_number: i32,
+        book_name: &str,
+        chapter: i32,
+        start_verse: i32,
+        range_end: Option<i32>,
+        verses: Vec<ChapterVerse>,
+    ) {
         // Load ALL chapter verses so "verse N" can navigate backward too.
         let loaded: Vec<LoadedVerse> = verses
             .into_iter()
-            .map(|(v, text)| {
-                let words = text_to_word_set(&text);
-                let word_count = words.len();
-                LoadedVerse {
-                    verse_number: v,
-                    text,
-                    words,
-                    word_count,
-                }
+            .map(|v| LoadedVerse {
+                verse_number: v.verse,
+                texts: std::iter::once(&v.text).chain(&v.alternates).map(|t| content_words(t)).collect(),
+                text: v.text,
             })
             .collect();
 
@@ -134,19 +224,23 @@ impl ReadingMode {
             .position(|v| v.verse_number == start_verse)
             .unwrap_or(0);
 
+        let range_end = range_end.filter(|&end| end > start_verse);
         log::info!(
-            "[READING] Started: {book_name} {chapter}:{start_verse} ({} verses loaded)",
+            "[READING] Started: {book_name} {chapter}:{start_verse}{} ({} verses loaded)",
+            range_end.map(|end| format!("-{end}")).unwrap_or_default(),
             loaded.len()
         );
 
+        self.weights = word_weights(&loaded);
         self.active = true;
         self.book_number = book_number;
         self.book_name = book_name.to_string();
         self.chapter = chapter;
         self.current_index = start_index;
         self.verses = loaded;
+        self.range_end = range_end;
+        self.previous_words.clear();
         self.last_match_time = Instant::now();
-        self.accumulated_text.clear();
     }
 
     /// Check if reading mode is currently active.
@@ -208,7 +302,107 @@ impl ReadingMode {
         }
         self.active = false;
         self.verses.clear();
-        self.accumulated_text.clear();
+        self.range_end = None;
+    }
+
+    /// Run one final transcript through reading mode: (re)start on a fresh
+    /// direct detection, follow chapter navigation, then track the reading.
+    ///
+    /// `direct_hit` is the reference direct detection emitted for this
+    /// utterance, if any; `mentioned_books` are the book numbers it names.
+    /// `load_chapter(book, chapter)` fetches a chapter's verses. Returns the
+    /// verse to present when reading mode moved — a restart from
+    /// `direct_hit` returns `None`, since the detection itself presents it.
+    pub fn process(
+        &mut self,
+        transcript: &str,
+        direct_hit: Option<&crate::VerseRef>,
+        mentioned_books: &[i32],
+        load_chapter: &mut dyn FnMut(i32, i32) -> Option<Vec<ChapterVerse>>,
+    ) -> Option<ReadingAdvance> {
+        // Restart on a new explicit reference, unless it's the book and
+        // chapter already being followed.
+        if let Some(hit) = direct_hit {
+            let same_passage = self.active
+                && self.book_number == hit.book_number
+                && self.chapter == hit.chapter;
+            if !same_passage {
+                if let Some(verses) = load_chapter(hit.book_number, hit.chapter) {
+                    self.start_passage(
+                        hit.book_number,
+                        &hit.book_name,
+                        hit.chapter,
+                        hit.verse_start,
+                        hit.verse_end,
+                        verses,
+                    );
+                    // "Genesis chapter" → pause → "5" goes to chapter 5.
+                    let lower = transcript.to_lowercase();
+                    if lower.contains("chapter") && !lower.contains("next") && !lower.contains("previous") {
+                        self.set_expecting_chapter();
+                    }
+                }
+            }
+        }
+
+        if !self.active && !self.has_verses() {
+            return None;
+        }
+
+        // An utterance naming a different book is a spoken reference, not
+        // in-book navigation; its numbers must not be read against this
+        // book (issue #141: "Revelation chapter 20 verse 22" while reading
+        // Hebrews 12 presented Hebrews 12:22).
+        if !mentioned_books.is_empty() && !mentioned_books.contains(&self.book_number) {
+            log::info!("[READING] Skipping — utterance names a different book than the one being read");
+            return None;
+        }
+
+        log::info!("[READING] Checking chapter command for: {transcript:?}");
+        if let Some((change, verses)) = self
+            .check_chapter_command(transcript)
+            // "chapter 2, verse 12 to 14" is also a direct detection, which
+            // already started this passage — with its range, which a restart
+            // from here would drop.
+            .filter(|change| {
+                direct_hit.is_none_or(|hit| {
+                    (hit.book_number, hit.chapter, Some(hit.verse_start))
+                        != (change.book_number, change.new_chapter, change.start_verse)
+                })
+            })
+            .and_then(|change| Some((change.clone(), load_chapter(change.book_number, change.new_chapter)?)))
+            .filter(|(_, verses)| !verses.is_empty())
+        {
+            let start_verse = change.start_verse.unwrap_or(1);
+            // Never present a verse the chapter doesn't have (issue #141).
+            let Some(start_text) = verses.iter().find(|v| v.verse == start_verse).map(|v| v.text.clone()) else {
+                log::warn!(
+                    "[READING] Ignoring chapter change — verse {start_verse} not in {} {}",
+                    change.book_name,
+                    change.new_chapter
+                );
+                return None;
+            };
+            self.start_passage(
+                change.book_number,
+                &change.book_name,
+                change.new_chapter,
+                start_verse,
+                None,
+                verses,
+            );
+            return Some(ReadingAdvance {
+                book_number: change.book_number,
+                book_name: change.book_name.clone(),
+                chapter: change.new_chapter,
+                verse: start_verse,
+                verse_text: start_text,
+                reference: format!("{} {}:{start_verse}", change.book_name, change.new_chapter),
+                confidence: 1.0,
+            });
+        }
+
+        self.check_transcript(transcript)
     }
 
     /// Check if the transcript contains a chapter navigation command.
@@ -372,66 +566,124 @@ impl ReadingMode {
             return None;
         }
 
-        // Accumulate text for multi-fragment matching
-        if !self.accumulated_text.is_empty() {
-            self.accumulated_text.push(' ');
+        self.follow_reading(text, false)
+    }
+
+    /// Follow the reading on a partial (interim) transcript, so the screen
+    /// can move seconds before the final arrives. Only follows forward
+    /// through the passage — commands and restarts wait for the final, which
+    /// would otherwise act on them twice.
+    pub fn process_partial(&mut self, transcript: &str, mentioned_books: &[i32]) -> Option<ReadingAdvance> {
+        if !self.active || self.verses.is_empty() {
+            return None;
         }
-        self.accumulated_text.push_str(text);
+        if !mentioned_books.is_empty() && !mentioned_books.contains(&self.book_number) {
+            return None;
+        }
+        self.follow_reading(transcript, true)
+    }
 
-        // [DIAG] Watch accumulated_text growth — only cleared on advance_to,
-        // so if matches never trigger, this grows until timeout pauses us.
-        if self.accumulated_text.len() > 4096 {
-            log::warn!(
-                "[READING] accumulated_text large: {} bytes (no advance since last clear)",
-                self.accumulated_text.len(),
-            );
+    /// Score the utterance against the current verse and the next few, and
+    /// move to a later verse only when it clearly fits better.
+    ///
+    /// Moves happen on the opening words of the next verse rather than the
+    /// closing words of the current one: after a verse ends a preacher
+    /// often stops to comment, and that commentary must not move the screen.
+    /// Content never moves backward — re-reading a verse holds it, and only
+    /// an explicit "verse N" goes back.
+    ///
+    /// `interim` marks a partial transcript, whose words can still change:
+    /// it needs a stronger match, never relocates, and leaves the look-back
+    /// to the final that follows.
+    fn follow_reading(&mut self, text: &str, interim: bool) -> Option<ReadingAdvance> {
+        let words = content_words(text);
+        if words.is_empty() {
+            return None;
+        }
+        // Fragments are short, so an unresolved previous fragment is read
+        // together with this one (see `previous_words`).
+        let spoken: Vec<String> = self.previous_words.iter().chain(&words).cloned().collect();
+        let score = |verse: &LoadedVerse| {
+            verse.texts.iter().map(|t| in_order_score(&spoken, t, &self.weights)).fold(0.0, f64::max)
+        };
+
+        let current_score = score(self.verses.get(self.current_index)?);
+        if current_score >= MIN_MATCH_SCORE {
+            self.last_match_time = Instant::now();
         }
 
-        let transcript_words = text_to_word_set(&self.accumulated_text);
+        // (index, raw score, score after the skip penalty)
+        let mut best: Option<(usize, f64, f64)> = None;
+        for skip in 0..LOOKAHEAD_VERSES {
+            let index = self.current_index + 1 + skip;
+            let Some(verse) = self.verses.get(index) else { break };
+            let raw = score(verse);
+            #[expect(clippy::cast_precision_loss, reason = "skip is at most LOOKAHEAD_VERSES")]
+            let adjusted = raw / (1.0 + SKIP_PENALTY * skip as f64);
+            let past_range = self.range_end.is_some_and(|end| verse.verse_number > end);
+            let needed = MIN_MATCH_SCORE
+                * if past_range { PAST_RANGE_FACTOR } else { 1.0 }
+                * if interim { INTERIM_FACTOR } else { 1.0 };
+            if adjusted >= needed && raw > current_score + ADVANCE_MARGIN && best.is_none_or(|(_, _, b)| adjusted > b) {
+                best = Some((index, raw, adjusted));
+            }
+        }
 
-        // Check current verse
-        if let Some(current) = self.verses.get(self.current_index) {
-            let overlap = word_overlap(&transcript_words, &current.words, current.word_count);
-            if overlap >= MIN_WORD_OVERLAP {
-                // Matched current verse — now check if we should advance to next
-                let next_idx = self.current_index + 1;
-                if next_idx < self.verses.len() {
-                    let next = &self.verses[next_idx];
-                    let next_overlap = word_overlap(&transcript_words, &next.words, next.word_count);
+        // Lost: the reader is plainly reading a verse outside the lookahead —
+        // started somewhere other than the spoken reference ("14 to 16",
+        // then reads from verse 9), or went back. It takes a long in-order
+        // match, well above a normal move, so commentary echoing a phrase
+        // from elsewhere in the chapter can't trigger it.
+        if best.is_none() && !interim && current_score < MIN_MATCH_SCORE {
+            let window = self.current_index..=self.current_index + LOOKAHEAD_VERSES;
+            let elsewhere = self
+                .verses
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| !window.contains(i))
+                .map(|(i, verse)| (i, score(verse)))
+                .max_by(|a, b| a.1.total_cmp(&b.1));
+            if let Some((index, raw)) = elsewhere.filter(|&(_, raw)| raw >= RELOCATE_SCORE) {
+                log::info!(
+                    "[READING] Relocating: verse {} scored {raw:.2}, current verse {} at {current_score:.2}",
+                    self.verses[index].verse_number,
+                    self.verses[self.current_index].verse_number,
+                );
+                let advance = self.advance_to(index);
+                self.previous_words = words;
+                return advance;
+            }
+        }
 
-                    // If transcript also matches next verse, advance
-                    if next_overlap >= MIN_WORD_OVERLAP {
-                        return self.advance_to(next_idx);
-                    }
-                }
-
-                // Still on current verse, reset match timer
-                self.last_match_time = Instant::now();
+        let Some((index, raw, _)) = best else {
+            if interim {
                 return None;
             }
-        }
-
-        // Check next verse (speaker may have moved ahead without us catching current)
-        let next_idx = self.current_index + 1;
-        if next_idx < self.verses.len() {
-            let next = &self.verses[next_idx];
-            let overlap = word_overlap(&transcript_words, &next.words, next.word_count);
-            if overlap >= MIN_WORD_OVERLAP {
-                return self.advance_to(next_idx);
+            // Words that plainly continue the current verse are settled;
+            // anything else may be the opening of the next one.
+            let best_later = (1..=LOOKAHEAD_VERSES)
+                .filter_map(|ahead| self.verses.get(self.current_index + ahead))
+                .map(score)
+                .fold(0.0, f64::max);
+            if current_score >= MIN_MATCH_SCORE && current_score >= best_later {
+                self.previous_words.clear();
+            } else {
+                self.previous_words = words;
             }
+            return None;
+        };
+        log::info!(
+            "[READING] Following: verse {} scored {raw:.2} vs current verse {} at {current_score:.2}",
+            self.verses[index].verse_number,
+            self.verses[self.current_index].verse_number,
+        );
+        let advance = self.advance_to(index);
+        // This utterance already belongs to the new verse. (A partial's
+        // words come again in its final.)
+        if !interim {
+            self.previous_words = words;
         }
-
-        // Check verse after next (speaker may have skipped one)
-        let skip_idx = self.current_index + 2;
-        if skip_idx < self.verses.len() {
-            let skip = &self.verses[skip_idx];
-            let overlap = word_overlap(&transcript_words, &skip.words, skip.word_count);
-            if overlap >= MIN_WORD_OVERLAP {
-                return self.advance_to(skip_idx);
-            }
-        }
-
-        None
+        advance
     }
 
     /// Check if the transcript contains a verse navigation command:
@@ -509,8 +761,8 @@ impl ReadingMode {
         let verse_text = verse.text.clone();
 
         self.current_index = index;
+        self.previous_words.clear();
         self.last_match_time = Instant::now();
-        self.accumulated_text.clear();
 
         let reference = format!("{} {}:{verse_number}", self.book_name, self.chapter);
         log::info!("[READING] Advanced to: {reference}");
@@ -564,8 +816,12 @@ fn extract_verse_number(text: &str) -> Option<i32> {
                 first_num, rest_trimmed.split_whitespace().next().unwrap_or(""));
             return None; // Let check_chapter_command handle it
         }
-        // Single number - return it as verse
-        return Some(first_num);
+        // Only a number standing alone ("26.") is a verse. A leading number
+        // followed by words is part of something else — "1 John 2" must not
+        // jump to verse 1.
+        if rest_trimmed.trim_end_matches(['.', ',', '?', '!']).is_empty() {
+            return Some(first_num);
+        }
     }
 
     None
@@ -673,31 +929,86 @@ fn parse_number_and_rest(text: &str) -> Option<(i32, &str)> {
     None
 }
 
-/// Convert text to a set of lowercase words (stripped of punctuation).
-fn text_to_word_set(text: &str) -> HashSet<String> {
-    text.split_whitespace()
-        .map(|w| {
-            w.to_lowercase()
-                .chars()
-                .filter(|c| c.is_alphanumeric() || *c == '\'')
-                .collect::<String>()
-        })
-        .filter(|w| w.len() >= 2) // Skip single-char words
+/// Function words (modern and KJV) that carry no verse identity.
+const STOPWORDS: &[&str] = &[
+    "a", "about", "after", "again", "all", "also", "am", "an", "and", "any", "are", "art", "as", "at",
+    "be", "because", "been", "before", "being", "but", "by", "can", "could", "did", "do", "doth",
+    "even", "for", "from", "had", "has", "hast", "hath", "have", "he", "her", "here", "hers", "him",
+    "his", "how", "i", "if", "in", "into", "is", "it", "its", "just", "let", "may", "me", "might",
+    "mine", "more", "my", "no", "nor", "not", "now", "o", "of", "oh", "on", "one", "or", "our",
+    "out", "own", "shall", "she", "should", "so", "such", "than", "that", "the", "thee", "their",
+    "them", "then", "there", "these", "they", "thine", "this", "those", "thou", "thy", "to", "unto",
+    "up", "upon", "us", "very", "was", "we", "were", "what", "when", "where", "which", "while",
+    "who", "whom", "why", "will", "with", "would", "ye", "yea", "yes", "yet", "you", "your",
+];
+
+/// Lowercased, lightly stemmed content words of `text`, in order.
+fn content_words(text: &str) -> Vec<String> {
+    text.split(|c: char| !c.is_alphanumeric() && c != '\'' && c != '\u{2019}')
+        .map(|w| w.to_lowercase().replace(['\'', '\u{2019}'], ""))
+        .filter(|w| w.len() >= 2 && !w.chars().all(|c| c.is_ascii_digit()))
+        .filter(|w| !STOPWORDS.contains(&w.as_str()))
+        .map(|w| stem(&w))
         .collect()
 }
 
-/// Calculate what fraction of `verse_words` appear in `transcript_words`.
-fn word_overlap(
-    transcript_words: &HashSet<String>,
-    verse_words: &HashSet<String>,
-    verse_word_count: usize,
-) -> f64 {
-    if verse_word_count == 0 {
-        return 0.0;
+/// Fold common inflections so "lights"/"light", "believeth"/"believed"/
+/// "believe" and "separated"/"separate" compare equal. Deliberately crude:
+/// both sides go through the same function, so it only has to be
+/// consistent, not linguistically right.
+fn stem(word: &str) -> String {
+    let mut w = word;
+    for suffix in ["eth", "est", "ing", "ed", "es", "s"] {
+        if w.len() > suffix.len() + 2 {
+            if let Some(stripped) = w.strip_suffix(suffix) {
+                // "glass" and "witness" keep their double s.
+                if !(suffix == "s" && stripped.ends_with('s')) {
+                    w = stripped;
+                    break;
+                }
+            }
+        }
     }
-    let matches = verse_words.intersection(transcript_words).count();
-    #[expect(clippy::cast_precision_loss, reason = "word counts are small enough for f64 precision")]
-    { matches as f64 / verse_word_count as f64 }
+    w.strip_suffix('e').filter(|s| s.len() >= 3).unwrap_or(w).to_string()
+}
+
+/// Weight of each word by how few verses of the chapter use it: a word
+/// unique to one verse weighs 1.0; one in every verse weighs little.
+fn word_weights(verses: &[LoadedVerse]) -> HashMap<String, f64> {
+    let mut verse_counts: HashMap<String, usize> = HashMap::new();
+    for verse in verses {
+        let unique: HashSet<&String> = verse.texts.iter().flatten().collect();
+        for word in unique {
+            *verse_counts.entry(word.clone()).or_default() += 1;
+        }
+    }
+    #[expect(clippy::cast_precision_loss, reason = "verse counts are small")]
+    let n = verses.len() as f64;
+    verse_counts
+        .into_iter()
+        .map(|(word, count)| {
+            #[expect(clippy::cast_precision_loss, reason = "verse counts are small")]
+            let weight = (1.0 + n / count as f64).ln() / (1.0 + n).ln();
+            (word, weight)
+        })
+        .collect()
+}
+
+/// Weighted longest common subsequence of `spoken` and `verse`: the total
+/// weight of the words they share in the same order. Order is what tells
+/// apart neighbouring verses built from the same words.
+fn in_order_score(spoken: &[String], verse: &[String], weights: &HashMap<String, f64>) -> f64 {
+    let mut row = vec![0.0_f64; verse.len() + 1];
+    for word in spoken {
+        let weight = weights.get(word).copied().unwrap_or(0.0);
+        let mut diagonal = 0.0;
+        for (j, verse_word) in verse.iter().enumerate() {
+            let above = row[j + 1];
+            row[j + 1] = if word == verse_word { diagonal + weight } else { above.max(row[j]) };
+            diagonal = above;
+        }
+    }
+    row[verse.len()]
 }
 
 #[cfg(test)]
@@ -769,12 +1080,94 @@ mod tests {
     }
 
     #[test]
-    fn test_word_overlap_function() {
-        let transcript = text_to_word_set("for it seemed good to the holy ghost");
-        let verse = text_to_word_set("For it seemed good to the Holy Ghost, and to us, to lay upon you no greater burden than these necessary things;");
-        let count = verse.len();
-        let overlap = word_overlap(&transcript, &verse, count);
-        assert!(overlap > 0.3); // At least some overlap
+    fn test_content_words_fold_inflections() {
+        assert_eq!(content_words("And the lights"), content_words("light"));
+        assert_eq!(content_words("believeth"), content_words("believed"));
+        assert_eq!(content_words("separated"), content_words("separate"));
+        assert_eq!(content_words("the sea of glass"), vec!["sea", "glass"]);
+        assert!(content_words("And so, unto them that were").is_empty());
+    }
+
+    #[test]
+    fn test_in_order_score_prefers_word_order() {
+        let verse = content_words("fathers known young men");
+        let weights: HashMap<String, f64> = verse.iter().map(|w| (w.clone(), 1.0)).collect();
+        let in_order = in_order_score(&content_words("fathers known young men"), &verse, &weights);
+        let shuffled = in_order_score(&content_words("young men known fathers"), &verse, &weights);
+        assert!((in_order - 4.0).abs() < 1e-9);
+        assert!(shuffled < in_order);
+    }
+
+    fn passage(verses: &[(i32, &str, &[&str])]) -> Vec<ChapterVerse> {
+        verses
+            .iter()
+            .map(|(verse, text, alternates)| ChapterVerse {
+                verse: *verse,
+                text: (*text).to_string(),
+                alternates: alternates.iter().map(|a| (*a).to_string()).collect(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_follows_alternate_translation_wording() {
+        // KJV on screen, the reader uses the NIV.
+        let mut rm = ReadingMode::new();
+        rm.start_passage(1, "Genesis", 1, 6, None, passage(&[
+            (6, "And God said, Let there be a firmament in the midst of the waters", &["And God said, Let there be a vault between the waters to separate water from water"]),
+            (7, "And God made the firmament, and divided the waters which were under the firmament", &["So God made the vault and separated the water under the vault from the water above it"]),
+            (8, "And God called the firmament Heaven", &["God called the vault sky"]),
+        ]));
+        let advance = rm.check_transcript("so god made the vault and separated the water under the").unwrap();
+        assert_eq!(advance.verse, 7);
+        assert!(advance.verse_text.contains("firmament"), "display text stays in the screen's translation");
+    }
+
+    #[test]
+    fn test_commentary_does_not_follow_past_range_end() {
+        let mut rm = ReadingMode::new();
+        rm.start_passage(62, "1 John", 2, 14, Some(14), passage(&[
+            (14, "I have written to you, fathers, because you have known Him who is from the beginning", &[]),
+            (15, "Do not love the world or the things in the world", &[]),
+        ]));
+        assert_eq!(rm.range_end, None, "a range ending at the start verse is no range");
+        rm.start_passage(62, "1 John", 2, 13, Some(14), passage(&[
+            (13, "I write to you, fathers, because you have known Him who is from the beginning", &[]),
+            (14, "I have written to you, young men, because you are strong, and the word of God abides in you", &[]),
+            (15, "Do not love the world or the things in the world", &[]),
+        ]));
+        assert_eq!(rm.check_transcript("because you are strong and the word of God abides").map(|a| a.verse), Some(14));
+        assert!(rm.check_transcript("we love the world in this church").is_none());
+        assert_eq!(rm.check_transcript("Do not love the world or the things in the world").map(|a| a.verse), Some(15));
+    }
+
+    #[test]
+    fn test_from_parallel_groups_translations_per_verse() {
+        let row = |translation_id: i64, verse: i32, text: &str| rhema_bible::Verse {
+            id: 0,
+            translation_id,
+            book_number: 1,
+            book_name: "Genesis".into(),
+            book_abbreviation: "Gen".into(),
+            chapter: 1,
+            verse,
+            text: text.into(),
+        };
+        let verses = ChapterVerse::from_parallel(
+            vec![row(1, 1, "kjv 1"), row(2, 1, "niv 1"), row(3, 1, "esv 1"), row(2, 2, "niv 2"), row(1, 3, "kjv 3")],
+            1,
+        );
+        assert_eq!(verses, vec![
+            ChapterVerse { verse: 1, text: "kjv 1".into(), alternates: vec!["niv 1".into(), "esv 1".into()] },
+            // Verse 2 is missing from the display translation: dropped.
+            ChapterVerse { verse: 3, text: "kjv 3".into(), alternates: vec![] },
+        ]);
+    }
+
+    #[test]
+    fn test_book_number_is_not_a_bare_verse() {
+        assert_eq!(extract_verse_number("1 john 2,"), None);
+        assert_eq!(extract_verse_number("26."), Some(26));
     }
 
     // --- Bug fix: extract_verse_number with prefix phrases ---

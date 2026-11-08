@@ -68,3 +68,6 @@ local/
 
 # Scratch lyric dumps for the song catalog
 songs.md
+
+# Reading-mode replay fixtures: real service transcripts, kept local
+src-tauri/crates/detection/tests/fixtures/

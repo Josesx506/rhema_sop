@@ -32,7 +32,7 @@ pub use semantic::detector::SemanticDetector;
 pub use merger::{DetectionMerger, MergedDetection};
 pub use pipeline::DetectionPipeline;
 pub use sentence_buffer::SentenceBuffer;
-pub use reading_mode::{ReadingMode, ReadingAdvance, ChapterChange};
+pub use reading_mode::{ChapterChange, ChapterVerse, ReadingAdvance, ReadingMode};
 
 #[cfg(feature = "onnx")]
 pub use semantic::onnx_embedder::OnnxEmbedder;

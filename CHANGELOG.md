@@ -21,6 +21,31 @@ Fork releases of Rhema (rhema_sop). Dates are release dates.
   and only the view is reordered — exports, dedupe and setlist resolution
   still see the catalog in insertion order.
 
+### Changed
+
+- **Reading mode follows a preacher verse by verse** after a reference like
+  "Genesis 1 verses 3 to 5", without them having to call out each verse.
+  Each utterance is matched in word order against the current verse and the
+  next three, in every translation of the on-screen language — preachers
+  often read from a different Bible than the one displayed — with words
+  weighted by how few verses in the chapter use them. The screen moves on the
+  next verse's opening words, not the end of the current one, so commentary
+  after a verse leaves it alone; skipped verses are followed, and when the
+  reader is plainly elsewhere in the chapter (a reference of verse 14, then
+  reading from 9) it jumps there. The previous matcher counted shared words
+  in any order, so verses built from the same words (1 John 2:13–14,
+  Genesis 1) moved late or to the wrong verse. Replayed against six real
+  sessions from the app log, the verse on screen was right after 98.5% of
+  utterances, up from 76.5%.
+- **A spoken range is respected**: after "verses 12 to 14", the screen only
+  goes past verse 14 if the reader clearly reads on, not on commentary.
+- **Reading mode can move on Deepgram's interim transcripts**, seconds before
+  the final, with a stricter match; commands such as "verse 4" and "next
+  chapter" still act only on finals.
+- **Saved logs keep whole transcripts.** Each partial and final line used to
+  stop at 60 characters, which cut most of a long Deepgram sentence; full
+  text lets a service be replayed to diagnose reading mode.
+
 ### Fixed
 
 - **Closing the main window now closes the projector and NDI outputs and
@@ -29,6 +54,9 @@ Fork releases of Rhema (rhema_sop). Dates are release dates.
   running with a frozen projector on the second screen, or invisibly with a
   hidden NDI window still sending. Closing one output window on its own still
   leaves the main window open.
+- **"1 John 2" no longer jumps the screen to verse 1.** A number leading an
+  utterance was taken as a spoken verse number; only a number said on its
+  own ("26.") is now.
 
 ## 0.4.3 — 2026-09-12
 
