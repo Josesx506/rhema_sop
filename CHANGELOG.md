@@ -21,6 +21,15 @@ Fork releases of Rhema (rhema_sop). Dates are release dates.
   and only the view is reordered — exports, dedupe and setlist resolution
   still see the catalog in insertion order.
 
+### Fixed
+
+- **Closing the main window now closes the projector and NDI outputs and
+  quits the app.** Tauri only exits once every window is gone, and nothing
+  closed the output windows when the main window went away, so the app kept
+  running with a frozen projector on the second screen, or invisibly with a
+  hidden NDI window still sending. Closing one output window on its own still
+  leaves the main window open.
+
 ## 0.4.3 — 2026-09-12
 
 ### Added
